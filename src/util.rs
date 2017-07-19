@@ -4,7 +4,7 @@ use futures_cpupool::CpuPool;
 use tokio_timer::*;
 use futures::*;
 use futures::future::ok;
-use std::time::{Instant, Duration};
+use std::time::Duration;
 
 use rusoto_sns::{Sns};
 

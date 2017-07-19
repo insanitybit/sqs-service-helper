@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 //#![deny(warnings)]
-#![feature(conservative_impl_trait, drop_types_in_const, sort_unstable, test)]
+#![feature(conservative_impl_trait, drop_types_in_const, test)]
 #![cfg_attr(feature = "flame_it", feature(plugin, custom_attribute))]
 #![cfg_attr(feature = "flame_it", plugin(flamer))]
 
@@ -100,7 +100,7 @@ pub mod publish;
 pub mod processor;
 pub mod consumer;
 pub mod autoscaling;
-pub mod queue;
+mod queue;
 
 
 #[cfg(test)]

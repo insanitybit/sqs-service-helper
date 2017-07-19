@@ -84,6 +84,11 @@ impl MessageHandlerActor {
                                     state_manager.deregister(receipt.clone(), true);
                                 }
                                 Err(e) => {
+                                    error!(
+                                        slog_scope::logger(),
+                                        "Actor failed to process message: {}",
+                                        e
+                                    );
                                     state_manager.deregister(receipt.clone(), false);
                                 }
                             }
@@ -137,16 +142,20 @@ impl MessageHandlerActor {
                                     state_manager.deregister(receipt.clone(), true);
                                 }
                                 Err(e) => {
+                                    error!(
+                                        slog_scope::logger(),
+                                        "Actor failed to process message: {}",
+                                        e
+                                    );
                                     state_manager.deregister(receipt.clone(), false);
                                 }
                             }
-                            continue
                         }
                         Err(RecvTimeoutError::Disconnected) => {
                             break
                         }
                         Err(RecvTimeoutError::Timeout) => {
-                            continue
+
                         }
                     }
                 }

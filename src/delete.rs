@@ -67,6 +67,11 @@ impl<SQ> MessageDeleter<SQ>
             match self.sqs_client.delete_message_batch(&req) {
                 Ok(res)   => {
                     let now = Instant::now();
+
+                    for failed in res.failed {
+                        println!("Failed to delete message {}", failed.message.unwrap_or(failed.code))
+                    }
+
                     for init_time in receipt_init_map.values() {
                         let dur = now - *init_time;
 
@@ -77,7 +82,7 @@ impl<SQ> MessageDeleter<SQ>
                 },
                 Err(e)  => {
                     if backoff >= 5 {
-                        warn!(slog_scope::logger(), "Failed to deleted {} messages {}", msg_count ,e);
+                        warn!(slog_scope::logger(), "Failed to deleted {} messages {}", msg_count , e);
                         break
                     }
                     backoff += 1;
@@ -311,14 +316,13 @@ impl MessageDeleteBufferActor {
                     match recvr.recv_timeout(actor.flush_period) {
                         Ok(msg) => {
                             actor.route_msg(msg);
-                            continue
                         }
                         Err(RecvTimeoutError::Disconnected) => {
                             break
                         }
                         Err(RecvTimeoutError::Timeout) => {
-                            sendr.send(MessageDeleteBufferMessage::Flush {});
-                            continue
+                            sendr.send(MessageDeleteBufferMessage::Flush {})
+                                .expect("Consumers of MessageDeleteBuffer failed");
                         }
                     }
                 }

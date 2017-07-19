@@ -1,3 +1,5 @@
+// This is experimental code, subject to tons of change
+#![allow(warnings)]
 use coco::deque::{self, Worker, Stealer};
 use parking_lot::{Mutex, Condvar, WaitTimeoutResult};
 

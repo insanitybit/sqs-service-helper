@@ -8,7 +8,6 @@ use slog_scope;
 use visibility::*;
 use autoscaling::*;
 use uuid;
-use util::*;
 use processor::*;
 
 use two_lock_queue::{Sender, Receiver, RecvTimeoutError, unbounded, channel};
@@ -449,13 +448,11 @@ impl ConsumerThrottlerActor
                     match recvr.recv_timeout(Duration::from_secs(30)) {
                         Ok(msg) => {
                             actor.route_msg(msg);
-                            continue
                         }
                         Err(RecvTimeoutError::Disconnected) => {
                             break
                         }
                         Err(RecvTimeoutError::Timeout) => {
-                            continue
                         }
                     }
                 }

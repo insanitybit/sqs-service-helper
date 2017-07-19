@@ -1,12 +1,13 @@
 use arraydeque::ArrayDeque;
 use lru_time_cache::LruCache;
-use two_lock_queue::{Sender, Receiver, RecvTimeoutError, unbounded, channel};
+use two_lock_queue::{Sender, Receiver, RecvTimeoutError, unbounded};
 use uuid;
 
-use std::cmp::{min, max};
+use std::cmp::{min, max, Ordering};
 use std::iter::{self, FromIterator};
 use std::time::{Instant, Duration};
 use std::thread;
+use std::mem::uninitialized;
 
 use consumer::*;
 use util::*;
@@ -148,7 +149,12 @@ pub struct ThrottlerActor
     id: String
 }
 
-
+/// Throttler tracks the processing time for messages from the consumer to the
+/// deleter. It then uses this information to calculate how many messages we can
+/// process in 30 seconds, the time it takes for a message to time out. Ideally
+/// we process as many messages as we can while ensuring that we don't back our
+/// message visibility handlers up, which could lead to more frequent double
+/// processing.
 pub struct Throttler {
     throttler: Option<ConsumerThrottlerActor>,
     inflight_timings: LruCache<String, Instant>,
@@ -158,7 +164,8 @@ pub struct Throttler {
 
 impl Throttler {
     pub fn new() -> Throttler {
-        let inflight_timings = LruCache::with_expiry_duration(Duration::from_secs(12 * 60 * 60));
+        let inflight_timings =
+            LruCache::with_expiry_duration(Duration::from_secs(12 * 60 * 60));
         let proc_times = StreamingMedian::new();
         Throttler {
             throttler: None,
@@ -237,19 +244,23 @@ impl Throttler {
 
                 if last_limit != self.inflight_limit {
                     debug!(slog_scope::logger(),
-                           "Setting new inflight limit to : {} from {}", self.inflight_limit, last_limit);
+                           "Setting new inflight limit to : {} from {}",
+                           self.inflight_limit, last_limit);
                 }
 
                 self.inflight_limit = min(self.inflight_limit, 120_000);
             }
             _ => {
-                warn!(slog_scope::logger(), "Attempting to deregister timeout that does not exist:\
+                warn!(slog_scope::logger(),
+                      "Attempting to deregister timeout that does not exist:\
                 receipt: {} success: {}", receipt, success);
             }
         };
     }
 
-    pub fn register_consumer_throttler(&mut self, consumer_throttler: ConsumerThrottlerActor) {
+    pub fn register_consumer_throttler(&mut self,
+                                       consumer_throttler: ConsumerThrottlerActor)
+    {
         self.throttler = Some(consumer_throttler);
     }
 
@@ -269,10 +280,12 @@ impl Throttler {
 
     fn route_msg(&mut self, msg: ThrottlerMessage) {
         match msg {
-            ThrottlerMessage::MessageStart { receipt, time_started } => self.message_start(receipt, time_started),
+            ThrottlerMessage::MessageStart { receipt, time_started } =>
+                self.message_start(receipt, time_started),
             ThrottlerMessage::MessageStop { receipt, time_stopped, success } =>
                 self.message_stop(receipt, time_stopped, success),
-            ThrottlerMessage::RegisterConsumerThrottler { throttler } => self.register_consumer_throttler(throttler)
+            ThrottlerMessage::RegisterConsumerThrottler { throttler } =>
+                self.register_consumer_throttler(throttler)
         }
     }
 
@@ -335,29 +348,33 @@ impl ThrottlerActor
     }
 
     pub fn register_consumer_throttler(&self, consumer_throttler: ConsumerThrottlerActor) {
-        self.sender.send(ThrottlerMessage::RegisterConsumerThrottler { throttler: consumer_throttler })
+        self.sender
+            .send(ThrottlerMessage::RegisterConsumerThrottler { throttler: consumer_throttler })
             .expect("ThrottlerActor.register_consumer_throttler: receivers have died.");
     }
 }
 
+/// The StreamingMedian struct provides a simple interface for inserting values
+/// and calculating medians. By default we start with a repeated median of 31,000.
+/// 31,000 is chosen because it is a "worst case" - we assume, at first, that the
+/// time to process is longer than the time it takes for a message visibility to
+/// time out.
 pub struct StreamingMedian {
     data: ArrayDeque<[u32; 64]>,
     sorted: [u32; 63],
     last_median: u32,
 }
 
-use std::mem::uninitialized;
-use arrayvec::ArrayVec;
-
 impl StreamingMedian {
     pub fn new() -> StreamingMedian {
         let data = ArrayDeque::from_iter(iter::repeat(31_000).take(64));
+
+        // We use unsafe here and then immediately assign values to the
+        // unused space
         let mut sorted: [u32; 63] = unsafe {uninitialized()};
 
         for (i, t) in data.iter().enumerate() {
-            unsafe {
-                *sorted.get_unchecked_mut(i) = *t;
-            }
+            sorted[i] = *t;
         }
 
         StreamingMedian {
@@ -367,10 +384,69 @@ impl StreamingMedian {
         }
     }
 
+    /// Returns the last median value without performing any recalculation
+    ///
+    /// # Example
+    /// ```
+    /// use sqs_service_handler::autoscaling::median;
+    ///
+    /// let stream = StreamingMedian::new();
+    /// assert_eq!(stream.last(), 31_000);
+    /// ```
     pub fn last(&self) -> u32 {
         self.last_median
     }
 
+    /// Returns the last median value without performing any recalculation
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The value to be inserted into the stream
+    /// # Example
+    /// ```
+    /// use sqs_service_handler::autoscaling::median;
+    ///
+    /// let stream = StreamingMedian::new();
+    /// assert_eq!(stream.insert_and_calculate(31_000), 31_000);
+    /// ```
+    /// The algorithm used to efficiently insert and calculate relies
+    /// on the fact that the data is always left in a sorted state.
+    ///
+    /// First we pop off the oldest value, 'removed', from our internal
+    /// ring buffer. Then we add our new value 'value' to the buffer at
+    /// the back. We use this buffer to maintain a temporal relationship
+    /// between our values.
+    ///
+    /// A separate stack array 'self.sorted' is used to maintain a sorted
+    /// representation of the data.
+    ///
+    /// We binary search for 'removed' in our 'sorted' array and store the
+    /// index as 'remove_index'.
+    ///
+    /// We then calculate where to insert the new 'value' by binary searching
+    /// for it, either finding it already or where to insert it.
+    ///
+    /// If the 'insert_index' for our 'value' is less than the 'remove_index'
+    /// we shift the data between the 'remove_index' and the 'insert_index' over
+    /// one space. This overwrites the old value we want to remove while maintaining
+    /// order. We can then insert our value into the array.
+    ///
+    /// Example:
+    /// Starting with a self.sorted of
+    /// [2, 3, 4, 5, 7, 8]
+    /// We then call insert_and_calculate(6)
+    /// Let's assume that '3' is the oldest value. This makes 'remove_index' = 1
+    /// We search for where to insert our value '6' and its' index 3.
+    /// [2, 3, 4, 5, 7, 8] <- remove_index = 1, insert_index = 3
+    /// Shift the data between 1 and 3 over by one.
+    /// [2, 4, 5, 5, 7, 8]
+    /// Insert our value into index 3.
+    /// [2, 4, 5, 6, 7, 8]
+    ///
+    /// A similar approach is performed in the case of the insert_index being before
+    /// the remove index.
+    ///
+    /// Unsafe is used here to dramatically improve performance - a full 3-5x
     pub fn insert_and_calculate(&mut self, value: u32) -> u32 {
         let mut scratch_space: [u32; 63] = unsafe {uninitialized()};
 
@@ -411,8 +487,12 @@ impl StreamingMedian {
             // [2, 4, 5, 6, 7, 8]
 
             unsafe {
-                scratch_space.get_unchecked_mut(remove_index + 1..insert_index).copy_from_slice(&self.sorted.get_unchecked(remove_index + 1..insert_index));
-                self.sorted.get_unchecked_mut(remove_index..insert_index - 1).copy_from_slice(&scratch_space.get_unchecked(remove_index + 1..insert_index));
+                scratch_space.get_unchecked_mut(remove_index + 1..insert_index)
+                    .copy_from_slice(&self.sorted.get_unchecked(remove_index + 1..insert_index));
+
+                self.sorted.get_unchecked_mut(remove_index..insert_index - 1)
+                    .copy_from_slice(&scratch_space.get_unchecked(remove_index + 1..insert_index));
+
                 *self.sorted.get_unchecked_mut(insert_index - 1) = value;
             }
         } else {
@@ -435,12 +515,14 @@ impl StreamingMedian {
     }
 }
 
-use std::cmp::Ordering;
-
 fn binary_search<T>(t: &[T], x: &T) -> usize where T: Ord {
     binary_search_by(t, |p| p.cmp(x))
 }
 
+// A custom binary search that always returns a usize, showing where an item is or
+// where an item can be inserted to preserve sorted order
+// Since we have no use for differentiating between the two cases, a single usize
+// is sufficient.
 fn binary_search_by<T, F>(t: &[T], mut f: F) -> usize
     where F: FnMut(&T) -> Ordering
 {
@@ -491,7 +573,7 @@ mod test {
 
         let mut median_tracker = StreamingMedian::new();
 
-        let mut ascending_iter = (0..);
+        let mut ascending_iter = 0..;
         for _ in 0..100_000 {
             median_tracker.insert_and_calculate(ascending_iter.next().unwrap());
         }
@@ -508,7 +590,7 @@ mod test {
 
         let mut median_tracker = StreamingMedian::new();
 
-        let mut ascending_iter = (200_000..);
+        let mut ascending_iter = 200_000..;
         for _ in 0..100_000 {
             median_tracker.insert_and_calculate(ascending_iter.next().unwrap());
         }

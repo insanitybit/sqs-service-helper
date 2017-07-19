@@ -14,10 +14,8 @@ use std::iter::Iterator;
 use std::thread;
 use delete::*;
 use slog_scope;
-use consumer::ConsumerThrottlerActor;
 
 use lru_time_cache::LruCache;
-use std::cmp::{min, max};
 
 /// The MessageStateManager manages the local message's state in the SQS service. That is, it will
 /// handle maintaining the messages visibility, and it will handle deleting the message
@@ -397,7 +395,6 @@ impl VisibilityTimeoutExtenderBufferActor {
     pub fn new(actor: VisibilityTimeoutExtenderBuffer)
                -> VisibilityTimeoutExtenderBufferActor
     {
-        let mut actor = actor;
         let (vis_sender, vis_receiver) = unbounded();
         let id = uuid::Uuid::new_v4().to_string();
         let vis_recvr = vis_receiver;
@@ -425,9 +422,7 @@ impl VisibilityTimeoutExtenderBufferActor {
                 });
         }
 
-        let mut actor = actor;
         let (del_sender, del_receiver) = unbounded();
-        let id = uuid::Uuid::new_v4().to_string();
         let del_recvr = del_receiver;
 
         for _ in 0..1 {
@@ -467,9 +462,9 @@ impl VisibilityTimeoutExtenderBufferActor {
                                     should_delete, ..
                                 } => {
                                     if should_delete {
-                                        del_sender.send(msg);
+                                        del_sender.send(msg).expect("Deleter died.");
                                     } else {
-                                        vis_sender.send(msg);
+                                        vis_sender.send(msg).expect("Deleter died.");
                                     }
                                 }
                                 msg => actor.route_msg(msg)
