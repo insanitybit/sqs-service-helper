@@ -17,7 +17,7 @@ use slog_scope;
 
 use lru_time_cache::LruCache;
 
-/// The MessageStateManager manages the local message's state in the SQS service. That is, it will
+/// The `MessageStateManager` manages the local message's state in the SQS service. That is, it will
 /// handle maintaining the messages visibility, and it will handle deleting the message
 /// Anything actors that may impact this state should likely be invoked or managed by this actor
 pub struct MessageStateManager
@@ -213,7 +213,7 @@ impl VisibilityTimeoutActor {
                     Ok(msg) => {
                         match msg {
                             VisibilityTimeoutMessage::StartVariant { init_timeout, start_time } => {
-                                actor.buf.extend(receipt.clone(), init_timeout, start_time.clone(), false);
+                                actor.buf.extend(receipt.clone(), init_timeout, start_time, false);
 
                                 // we can't afford to not flush the initial timeout
                                 actor.buf.flush();
@@ -225,7 +225,7 @@ impl VisibilityTimeoutActor {
                             => {
                                 match _start_time {
                                     Some(st) => {
-                                        actor.buf.extend(receipt.clone(), dur, st.clone(), should_delete);
+                                        actor.buf.extend(receipt.clone(), dur, st, should_delete);
                                     }
                                     None => {
                                         error!(slog_scope::logger(), "Error, no start time provided")
@@ -243,7 +243,7 @@ impl VisibilityTimeoutActor {
 
                         match _start_time {
                             Some(st) => {
-                                actor.buf.extend(receipt.clone(), dur, st.clone(), false);
+                                actor.buf.extend(receipt.clone(), dur, st, false);
                             }
                             None => {
                                 error!(slog_scope::logger(), "No start time provided")
@@ -675,7 +675,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
         }).collect();
 
         if entries.is_empty() {
-            for (receipt, init_time) in to_delete.into_iter() {
+            for (receipt, init_time) in to_delete {
                 self.deleter.delete_message(receipt, init_time);
             }
             return;
@@ -693,7 +693,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
                     if !t.failed.is_empty() {
                         let mut to_retry = Vec::with_capacity(t.failed.len());
                         for failed in t.failed.clone() {
-                            to_retry.push(id_map.get(&failed.id).unwrap().clone());
+                            to_retry.push(id_map[&failed.id].clone());
                         }
                         self.retry_extend(to_retry, 0);
                     }
@@ -713,7 +713,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
             };
         }
 
-        for (receipt, init_time) in to_delete.into_iter() {
+        for (receipt, init_time) in to_delete {
             self.deleter.delete_message(receipt, init_time);
         }
     }
@@ -759,7 +759,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
                     if !t.failed.is_empty() {
                         let mut to_retry = Vec::with_capacity(t.failed.len());
                         for failed in t.failed.clone() {
-                            to_retry.push(id_map.get(&failed.id).unwrap().clone());
+                            to_retry.push(id_map[&failed.id].clone());
                         }
                         thread::sleep(Duration::from_millis(5 * attempts as u64 + 1));
                         self.retry_extend(to_retry, attempts + 1);

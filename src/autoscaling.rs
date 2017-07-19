@@ -176,7 +176,7 @@ impl Throttler {
     }
 
     pub fn message_start(&mut self, receipt: String, time_started: Instant) {
-        if let Some(_) = self.inflight_timings.insert(receipt, time_started.clone()) {
+        if self.inflight_timings.insert(receipt, time_started).is_some() {
             error!(slog_scope::logger(), "Message starting twice");
         }
 
@@ -294,6 +294,11 @@ impl Throttler {
     }
 }
 
+impl Default for Throttler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ThrottlerActor
 {
@@ -354,7 +359,7 @@ impl ThrottlerActor
     }
 }
 
-/// The StreamingMedian struct provides a simple interface for inserting values
+/// `StreamingMedian` provides a simple interface for inserting values
 /// and calculating medians. By default we start with a repeated median of 31,000.
 /// 31,000 is chosen because it is a "worst case" - we assume, at first, that the
 /// time to process is longer than the time it takes for a message visibility to
@@ -371,7 +376,7 @@ impl StreamingMedian {
 
         // We use unsafe here and then immediately assign values to the
         // unused space
-        let mut sorted: [u32; 63] = unsafe {uninitialized()};
+        let mut sorted: [u32; 63] = unsafe { uninitialized() };
 
         for (i, t) in data.iter().enumerate() {
             sorted[i] = *t;
@@ -448,16 +453,16 @@ impl StreamingMedian {
     ///
     /// Unsafe is used here to dramatically improve performance - a full 3-5x
     pub fn insert_and_calculate(&mut self, value: u32) -> u32 {
-        let mut scratch_space: [u32; 63] = unsafe {uninitialized()};
+        let mut scratch_space: [u32; 63] = unsafe { uninitialized() };
 
         let removed = match self.data.pop_front() {
             Some(t) => t,
-            None    => unsafe {uninitialized()}
+            None => unsafe { uninitialized() }
         };
         self.data.push_back(value);
 
         if removed == value {
-            return unsafe {*self.sorted.get_unchecked(31)};
+            return unsafe { *self.sorted.get_unchecked(31) };
         }
 
         let remove_index = binary_search(&self.sorted, &removed);
@@ -466,10 +471,10 @@ impl StreamingMedian {
         // after the insert_index, allowing us to cut our search down
         let insert_index = {
             if removed > value {
-                let sorted_slice = unsafe{self.sorted.get_unchecked(..remove_index)};
+                let sorted_slice = unsafe { self.sorted.get_unchecked(..remove_index) };
                 binary_search(sorted_slice, &value)
             } else {
-                let sorted_slice = unsafe{self.sorted.get_unchecked(remove_index..)};
+                let sorted_slice = unsafe { self.sorted.get_unchecked(remove_index..) };
                 remove_index + binary_search(sorted_slice, &value)
             }
         };
@@ -488,10 +493,10 @@ impl StreamingMedian {
 
             unsafe {
                 scratch_space.get_unchecked_mut(remove_index + 1..insert_index)
-                    .copy_from_slice(&self.sorted.get_unchecked(remove_index + 1..insert_index));
+                    .copy_from_slice(self.sorted.get_unchecked(remove_index + 1..insert_index));
 
                 self.sorted.get_unchecked_mut(remove_index..insert_index - 1)
-                    .copy_from_slice(&scratch_space.get_unchecked(remove_index + 1..insert_index));
+                    .copy_from_slice(scratch_space.get_unchecked(remove_index + 1..insert_index));
 
                 *self.sorted.get_unchecked_mut(insert_index - 1) = value;
             }
@@ -503,17 +508,28 @@ impl StreamingMedian {
             // [2, 3, 4, 5, 5, 7, 9] Shift values
             // [2, 3, 4, 6, 7, 8, 9] Insert value
             unsafe {
-                scratch_space.get_unchecked_mut(insert_index..remove_index).copy_from_slice(&self.sorted.get_unchecked(insert_index..remove_index));
-                self.sorted.get_unchecked_mut(insert_index + 1..remove_index + 1).copy_from_slice(&scratch_space.get_unchecked(insert_index..remove_index));
+                scratch_space.get_unchecked_mut(insert_index..remove_index)
+                    .copy_from_slice(self.sorted.get_unchecked(insert_index..remove_index));
+
+                self.sorted.get_unchecked_mut(insert_index + 1..remove_index + 1)
+                    .copy_from_slice(scratch_space.get_unchecked(insert_index..remove_index));
+
                 *self.sorted.get_unchecked_mut(insert_index) = value;
             }
         }
 
-        let median = unsafe {*self.sorted.get_unchecked(31)};
+        let median = unsafe { *self.sorted.get_unchecked(31) };
         self.last_median = median;
         median
     }
 }
+
+impl Default for StreamingMedian {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 
 fn binary_search<T>(t: &[T], x: &T) -> usize where T: Ord {
     binary_search_by(t, |p| p.cmp(x))
@@ -532,7 +548,7 @@ fn binary_search_by<T, F>(t: &[T], mut f: F) -> usize
     loop {
         let (head, tail) = s.split_at(s.len() >> 1);
         if tail.is_empty() {
-            return base
+            return base;
         }
         match f(&tail[0]) {
             Ordering::Less => {

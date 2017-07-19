@@ -88,8 +88,8 @@ impl<SQ> DelayMessageConsumer<SQ>
                 match msg.receipt_handle {
                     Some(ref receipt) if msg.body.is_some() => {
                         let now = Instant::now();
-                        self.vis_manager.register(receipt.to_owned(), Duration::from_secs(30), now.clone());
-                        self.throttler.message_start(receipt.to_owned(), now.clone());
+                        self.vis_manager.register(receipt.to_owned(), Duration::from_secs(30), now);
+                        self.throttler.message_start(receipt.to_owned(), now);
                         Some(msg)
                     }
                     _   => None
@@ -97,6 +97,7 @@ impl<SQ> DelayMessageConsumer<SQ>
             }).collect();
 
             trace!(slog_scope::logger(), "Processing {} messages", messages.len());
+
             for message in messages {
                 self.processor.process(message.clone());
             }
@@ -131,7 +132,7 @@ impl<SQ> DelayMessageConsumer<SQ>
         while self.vis_manager.sender.len() > MAX_INFLIGHT_MESSAGES {
             thread::sleep(Duration::from_millis(backoff));
             if backoff * 2 <  max_backoff{
-                backoff = backoff * 2;
+                backoff *= 2;
             } else {
                 backoff = init_backoff;
             }
@@ -342,7 +343,7 @@ impl DelayMessageConsumerBroker
 
     pub fn shut_down(&mut self) {
         self.workers.clear();
-        self.worker_count == 0;
+        self.worker_count = 0;
     }
 
     #[cfg_attr(feature="flame_it", flame)]
@@ -361,7 +362,7 @@ impl DelayMessageConsumerBroker
 
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ConsumerThrottler {
     consumer_broker: Option<DelayMessageConsumerBroker>,
 }

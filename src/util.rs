@@ -66,23 +66,20 @@ pub fn new_sns_client<P>(sns_provider: &P) -> SnsClient<P, hyper::Client>
 
 
 #[cfg_attr(feature = "flame_it", flame)]
-pub fn create_queue<P>(pool: &CpuPool, provider: &P, queue_name: String, timer: Timer) -> String
+pub fn create_queue<P>(pool: &CpuPool, provider: &P, queue_name: &str, timer: &'static Timer) -> String
     where P: ProvideAwsCredentials + Clone + Send + 'static,
 {
     let create_queue_request = CreateQueueRequest {
         attributes: None,
-        queue_name: queue_name.clone()
+        queue_name: queue_name.to_owned()
     };
 
     let _provider = provider.clone();
-    let _queue_name = queue_name.clone();
+    let _queue_name = queue_name.to_owned();
 
     let queue_url = timeout_ms! {
         pool.clone(),
         move || {
-
-        // create_queue panics if it can't create the queue, we only do this once at the start of
-        // the program so it seems fine
             ok(SqsClient::new(
                 default_tls_client().unwrap(),
                 _provider,
@@ -96,7 +93,7 @@ pub fn create_queue<P>(pool: &CpuPool, provider: &P, queue_name: String, timer: 
 
     match queue_url {
         Ok(url) => url.queue_url.expect("Queue url was None"),
-        Err(_) => panic!("Timeout while trying to create queue: {}", queue_name)
+        _ => panic!("Timeout while trying to create queue: {}", queue_name)
     }
 }
 
@@ -122,8 +119,7 @@ pub enum Topic {
 impl Topic {
     pub fn get(self) -> String {
         match self {
-            Topic::Cached(t) => t,
-            Topic::Created(t) => t
+            Topic::Cached(t) | Topic::Created(t) => t,
         }
     }
 }
