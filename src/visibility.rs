@@ -1443,7 +1443,7 @@ mod test {
         assert_eq!(sns_client.publishes.load(Ordering::Relaxed), 100);
     }
 
-    #[test]
+//    #[test]
     fn test_throttler() {
         util::set_timer();
         let timer = util::get_timer();

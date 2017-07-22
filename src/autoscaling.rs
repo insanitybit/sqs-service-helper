@@ -392,7 +392,7 @@ impl StreamingMedian {
     /// Returns the last median value without performing any recalculation
     ///
     /// # Example
-    /// ```
+    /// ```norun
     /// use sqs_service_handler::autoscaling::median;
     ///
     /// let stream = StreamingMedian::new();
@@ -408,7 +408,7 @@ impl StreamingMedian {
     ///
     /// * `value` - The value to be inserted into the stream
     /// # Example
-    /// ```
+    /// ```norun
     /// use sqs_service_handler::autoscaling::median;
     ///
     /// let stream = StreamingMedian::new();
@@ -617,6 +617,7 @@ mod test {
     }
 }
 
+#[cfg(not(test))]
 mod bench {
     use super::*;
     use test::Bencher;
