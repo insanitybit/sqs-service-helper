@@ -14,13 +14,21 @@ use two_lock_queue::{Sender, Receiver, RecvTimeoutError, unbounded, channel};
 
 pub const MAX_INFLIGHT_MESSAGES: usize = 100;
 
+pub trait Consumer {
+    fn consume(&mut self);
+    fn throttle(&mut self, Duration);
+    fn shut_down(&mut self);
+    fn route_msg(&mut self, ConsumerMessage);
+
+}
+
 pub struct DelayMessageConsumer<SQ>
     where SQ: Sqs + Send + Sync + 'static,
 {
     sqs_client: Arc<SQ>,
     queue_url: String,
     metrics: Arc<Client>,
-    actor: DelayMessageConsumerActor,
+    actor: ConsumerActor,
     vis_manager: MessageStateManagerActor,
     processor: MessageHandlerBroker,
     throttler: ThrottlerActor,
@@ -34,7 +42,7 @@ impl<SQ> DelayMessageConsumer<SQ>
     pub fn new(sqs_client: Arc<SQ>,
                queue_url: String,
                metrics: Arc<Client>,
-               actor: DelayMessageConsumerActor,
+               actor: ConsumerActor,
                vis_manager: MessageStateManagerActor,
                processor: MessageHandlerBroker,
                throttler: ThrottlerActor)
@@ -52,8 +60,26 @@ impl<SQ> DelayMessageConsumer<SQ>
         }
     }
 
+    fn wait(&self) {
+        let init_backoff = 10;
+        let mut backoff = init_backoff;
+        let max_backoff = 100;
+        while self.vis_manager.sender.len() > MAX_INFLIGHT_MESSAGES {
+            thread::sleep(Duration::from_millis(backoff));
+            if backoff * 2 <  max_backoff{
+                backoff *= 2;
+            } else {
+                backoff = init_backoff;
+            }
+        }
+    }
+}
+
+impl<SQ> Consumer for DelayMessageConsumer<SQ>
+    where SQ: Sqs + Send + Sync + 'static,
+{
     #[cfg_attr(feature="flame_it", flame)]
-    pub fn consume(&self) {
+    fn consume(&mut self) {
         let msg_request = ReceiveMessageRequest {
             max_number_of_messages: Some(10),
             queue_url: self.queue_url.to_owned(),
@@ -107,16 +133,20 @@ impl<SQ> DelayMessageConsumer<SQ>
         }
     }
 
-    pub fn throttle(&mut self, how_long: Duration)
+    fn throttle(&mut self, how_long: Duration)
     {
         self.throttle = how_long;
     }
 
-    fn route_msg(&mut self, msg: DelayMessageConsumerMessage) {
+    fn shut_down(&mut self) {
+
+    }
+
+    fn route_msg(&mut self, msg: ConsumerMessage) {
         match msg {
-            DelayMessageConsumerMessage::Consume  => self.consume(),
-            DelayMessageConsumerMessage::Throttle {how_long}    => self.throttle(how_long),
-            DelayMessageConsumerMessage::ShutDown => {
+            ConsumerMessage::Consume  => self.consume(),
+            ConsumerMessage::Throttle {how_long}    => self.throttle(how_long),
+            ConsumerMessage::ShutDown => {
                 self.shut_down();
                 return
             },
@@ -124,27 +154,9 @@ impl<SQ> DelayMessageConsumer<SQ>
 
         self.actor.consume();
     }
-
-    fn wait(&self) {
-        let init_backoff = 10;
-        let mut backoff = init_backoff;
-        let max_backoff = 100;
-        while self.vis_manager.sender.len() > MAX_INFLIGHT_MESSAGES {
-            thread::sleep(Duration::from_millis(backoff));
-            if backoff * 2 <  max_backoff{
-                backoff *= 2;
-            } else {
-                backoff = init_backoff;
-            }
-        }
-    }
-
-    fn shut_down(&mut self) {
-
-    }
 }
 
-pub enum DelayMessageConsumerMessage
+pub enum ConsumerMessage
 {
     Consume,
     Throttle {how_long: Duration},
@@ -152,28 +164,28 @@ pub enum DelayMessageConsumerMessage
 }
 
 #[derive(Clone)]
-pub struct DelayMessageConsumerActor
+pub struct ConsumerActor
 {
-    sender: Sender<DelayMessageConsumerMessage>,
-    receiver: Receiver<DelayMessageConsumerMessage>,
-    p_sender: Sender<DelayMessageConsumerMessage>,
-    p_receiver: Receiver<DelayMessageConsumerMessage>,
+    sender: Sender<ConsumerMessage>,
+    receiver: Receiver<ConsumerMessage>,
+    p_sender: Sender<ConsumerMessage>,
+    p_receiver: Receiver<ConsumerMessage>,
     id: String
 }
 
-impl DelayMessageConsumerActor
+impl ConsumerActor
 {
     #[cfg_attr(feature="flame_it", flame)]
-    pub fn new<SQ, F>(new: F)
-                      -> DelayMessageConsumerActor
-        where SQ: Sqs + Send + Sync + 'static,
-              F: Fn(DelayMessageConsumerActor) -> DelayMessageConsumer<SQ>,
+    pub fn new<C, F>(new: F)
+                      -> ConsumerActor
+        where C: Consumer + Send + 'static,
+              F: Fn(ConsumerActor) -> C,
     {
         let (sender, receiver) = unbounded();
         let (p_sender, p_receiver) = unbounded();
         let id = uuid::Uuid::new_v4().to_string();
 
-        let actor = DelayMessageConsumerActor {
+        let actor = ConsumerActor {
             sender,
             receiver: receiver.clone(),
             p_sender,
@@ -212,18 +224,18 @@ impl DelayMessageConsumerActor
     }
 
     #[cfg_attr(feature="flame_it", flame)]
-    pub fn from_queue<SQ, F>(new: &F,
-                             sender: Sender<DelayMessageConsumerMessage>,
-                             receiver: Receiver<DelayMessageConsumerMessage>,
-                             p_sender: Sender<DelayMessageConsumerMessage>,
-                             p_receiver: Receiver<DelayMessageConsumerMessage>)
-                             -> DelayMessageConsumerActor
-        where SQ: Sqs + Send + Sync + 'static,
-              F: Fn(DelayMessageConsumerActor) -> DelayMessageConsumer<SQ>,
+    pub fn from_queue<C, F>(new: &F,
+                            sender: Sender<ConsumerMessage>,
+                            receiver: Receiver<ConsumerMessage>,
+                            p_sender: Sender<ConsumerMessage>,
+                            p_receiver: Receiver<ConsumerMessage>)
+                            -> ConsumerActor
+        where C: Consumer + Send + 'static,
+              F: Fn(ConsumerActor) -> C,
     {
         let id = uuid::Uuid::new_v4().to_string();
 
-        let actor = DelayMessageConsumerActor {
+        let actor = ConsumerActor {
             sender,
             receiver: receiver.clone(),
             p_sender,
@@ -263,43 +275,43 @@ impl DelayMessageConsumerActor
 
     #[cfg_attr(feature="flame_it", flame)]
     pub fn consume(&self) {
-        self.sender.send(DelayMessageConsumerMessage::Consume)
+        self.sender.send(ConsumerMessage::Consume)
             .expect("Underlying consumer has died");
     }
 
     #[cfg_attr(feature="flame_it", flame)]
     pub fn throttle(&self, how_long: Duration) {
-        self.p_sender.send(DelayMessageConsumerMessage::Throttle {how_long})
+        self.p_sender.send(ConsumerMessage::Throttle {how_long})
             .expect("Underlying consumer has died");
     }
 
     pub fn shut_down(self) {
-        let _ = self.p_sender.send(DelayMessageConsumerMessage::ShutDown);
+        let _ = self.p_sender.send(ConsumerMessage::ShutDown);
     }
 }
 
 
 
 #[derive(Clone)]
-pub struct DelayMessageConsumerBroker
+pub struct ConsumerBroker
 {
-    pub workers: Vec<DelayMessageConsumerActor>,
+    pub workers: Vec<ConsumerActor>,
     pub worker_count: usize,
-    sender: Sender<DelayMessageConsumerMessage>,
-    p_sender: Sender<DelayMessageConsumerMessage>,
-    new: DelayMessageConsumerActor,
+    sender: Sender<ConsumerMessage>,
+    p_sender: Sender<ConsumerMessage>,
+    new: ConsumerActor,
     id: String
 }
 
-impl DelayMessageConsumerBroker
+impl ConsumerBroker
 {
     #[cfg_attr(feature="flame_it", flame)]
-    pub fn new<T, SQ, F>(new: F,
+    pub fn new<T, C, F>(new: F,
                          worker_count: usize,
                          max_queue_depth: T)
-                         -> DelayMessageConsumerBroker
-        where SQ: Sqs + Send + Sync + 'static,
-              F: Fn(DelayMessageConsumerActor) -> DelayMessageConsumer<SQ>,
+                         -> ConsumerBroker
+        where C: Consumer + Send + 'static,
+              F: Fn(ConsumerActor) -> C,
               T: Into<Option<usize>>,
     {
         let id = uuid::Uuid::new_v4().to_string();
@@ -308,19 +320,19 @@ impl DelayMessageConsumerBroker
         let (p_sender, p_receiver) = unbounded();
 
         let workers: Vec<_> = (0..worker_count)
-            .map(|_| DelayMessageConsumerActor::from_queue(&new, sender.clone(), receiver.clone(),
-            p_sender.clone(), p_receiver.clone()))
+            .map(|_| ConsumerActor::from_queue(&new, sender.clone(), receiver.clone(),
+                                               p_sender.clone(), p_receiver.clone()))
             .collect();
 
         let worker_count = workers.len();
 
-        DelayMessageConsumerBroker {
+        ConsumerBroker {
             workers,
             worker_count,
             sender: sender.clone(),
             p_sender: p_sender.clone(),
-            new: DelayMessageConsumerActor::from_queue(&new, sender.clone(), receiver.clone(),
-                                                       p_sender.clone(), p_receiver.clone()),
+            new: ConsumerActor::from_queue(&new, sender.clone(), receiver.clone(),
+                                           p_sender.clone(), p_receiver.clone()),
             id
         }
     }
@@ -346,17 +358,22 @@ impl DelayMessageConsumerBroker
         self.worker_count = 0;
     }
 
+    pub fn shut_down_blocking(&mut self) {
+        self.workers.clear();
+        self.worker_count = 0;
+    }
+
     #[cfg_attr(feature="flame_it", flame)]
     pub fn consume(&self) {
         self.sender.send(
-            DelayMessageConsumerMessage::Consume
+            ConsumerMessage::Consume
         ).unwrap();
     }
 
     #[cfg_attr(feature="flame_it", flame)]
     pub fn throttle(&self, how_long: Duration) {
         self.sender.send(
-            DelayMessageConsumerMessage::Throttle {how_long}
+            ConsumerMessage::Throttle {how_long}
         ).unwrap();
     }
 
@@ -364,7 +381,7 @@ impl DelayMessageConsumerBroker
 
 #[derive(Clone, Default)]
 pub struct ConsumerThrottler {
-    consumer_broker: Option<DelayMessageConsumerBroker>,
+    consumer_broker: Option<ConsumerBroker>,
 }
 
 impl ConsumerThrottler {
@@ -386,7 +403,7 @@ impl ConsumerThrottler {
         }
     }
 
-    pub fn register_consumer(&mut self, consumer: DelayMessageConsumerBroker) {
+    pub fn register_consumer(&mut self, consumer: ConsumerBroker) {
         self.consumer_broker = Some(consumer);
     }
 
@@ -411,7 +428,7 @@ impl ConsumerThrottler {
 pub enum ConsumerThrottlerMessage
 {
     Throttle {how_long: Duration},
-    RegisterconsumerBroker {consumer: DelayMessageConsumerBroker},
+    RegisterconsumerBroker {consumer: ConsumerBroker },
     DropConsumer,
     AddConsumer,
 }
@@ -468,7 +485,7 @@ impl ConsumerThrottlerActor
         }
     }
 
-    pub fn register_consumer(&self, consumer: DelayMessageConsumerBroker) {
+    pub fn register_consumer(&self, consumer: ConsumerBroker) {
         self.sender.send(ConsumerThrottlerMessage::RegisterconsumerBroker {consumer})
             .expect("ConsumerThrottlerActor.register_consumer receivers have died");
     }

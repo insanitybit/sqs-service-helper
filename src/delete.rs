@@ -402,7 +402,6 @@ pub enum DeleteBufferFlushMessage {
 #[derive(Clone)]
 pub struct DeleteBufferFlusherActor {
     sender: Sender<DeleteBufferFlushMessage>,
-    receiver: Receiver<DeleteBufferFlushMessage>,
     id: String,
 }
 
@@ -414,10 +413,10 @@ impl DeleteBufferFlusherActor {
         let actor = actor;
         let (sender, receiver) = unbounded();
         let id = uuid::Uuid::new_v4().to_string();
-        let recvr = receiver.clone();
+
         thread::spawn(move || {
             loop {
-                let recvr = recvr.clone();
+                let recvr = receiver.clone();
                 let actor = actor.clone();
                 let dur = actor.period; // Default, minimal timeout
 
@@ -443,7 +442,6 @@ impl DeleteBufferFlusherActor {
 
         DeleteBufferFlusherActor {
             sender: sender,
-            receiver: receiver,
             id: id,
         }
     }

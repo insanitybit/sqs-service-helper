@@ -17,33 +17,41 @@ use slog_scope;
 
 use lru_time_cache::LruCache;
 
+pub trait MessageStateManager {
+    fn register(&mut self, String, Duration, Instant);
+    fn deregister(&mut self, String, bool);
+    fn route_msg(&mut self, MessageStateManagerMessage);
+}
+
 /// The `MessageStateManager` manages the local message's state in the SQS service. That is, it will
 /// handle maintaining the messages visibility, and it will handle deleting the message
 /// Anything actors that may impact this state should likely be invoked or managed by this actor
-pub struct MessageStateManager
+pub struct SqsMessageStateManager
 {
     timers: LruCache<String, (VisibilityTimeoutActor, Instant)>,
     buffer: VisibilityTimeoutExtenderBufferActor,
     deleter: MessageDeleteBufferActor,
 }
 
-impl MessageStateManager
+impl SqsMessageStateManager
 {
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new(buffer: VisibilityTimeoutExtenderBufferActor,
-               deleter: MessageDeleteBufferActor) -> MessageStateManager
+               deleter: MessageDeleteBufferActor) -> SqsMessageStateManager
     {
         // Create the new MessageStateManager with a maximum cache  lifetime of 12 hours, which is
         // the maximum amount of time a message can be kept invisible
-        MessageStateManager {
+        SqsMessageStateManager {
             timers: LruCache::with_expiry_duration_and_capacity(Duration::from_secs(12 * 60 * 60), 120_000),
             buffer,
             deleter,
         }
     }
+}
 
+impl MessageStateManager for SqsMessageStateManager {
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn register(&mut self, receipt: String, visibility_timeout: Duration, start_time: Instant) {
+    fn register(&mut self, receipt: String, visibility_timeout: Duration, start_time: Instant) {
         let vis_timeout = VisibilityTimeout::new(self.buffer.clone(), self.deleter.clone(), receipt.clone());
         let vis_timeout = VisibilityTimeoutActor::new(vis_timeout);
         vis_timeout.start(visibility_timeout, start_time);
@@ -52,7 +60,7 @@ impl MessageStateManager
     }
 
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn deregister(&mut self, receipt: String, should_delete: bool) {
+    fn deregister(&mut self, receipt: String, should_delete: bool) {
         let vis_timeout = self.timers.remove(&receipt);
 
         match vis_timeout {
@@ -62,6 +70,19 @@ impl MessageStateManager
             None => {
                 warn!(slog_scope::logger(), "Attempting to deregister timeout that does not exist:\
                 receipt: {} should_delete: {}", receipt, should_delete);
+            }
+        };
+    }
+
+    #[cfg_attr(feature = "flame_it", flame)]
+    fn route_msg(&mut self, msg: MessageStateManagerMessage) {
+        match msg {
+            MessageStateManagerMessage::RegisterVariant {
+                receipt, visibility_timeout, start_time
+            } =>
+                self.register(receipt, visibility_timeout, start_time),
+            MessageStateManagerMessage::DeregisterVariant { receipt, should_delete } => {
+                self.deregister(receipt, should_delete)
             }
         };
     }
@@ -84,8 +105,9 @@ pub struct MessageStateManagerActor {
 
 impl MessageStateManagerActor {
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new(actor: MessageStateManager)
-               -> MessageStateManagerActor
+    pub fn new<M>(actor: M)
+                  -> MessageStateManagerActor
+        where M: MessageStateManager + Send + 'static
     {
         let mut actor = actor;
         let (sender, receiver) = unbounded();
@@ -130,22 +152,6 @@ impl MessageStateManagerActor {
     pub fn deregister(&self, receipt: String, should_delete: bool) {
         let msg = MessageStateManagerMessage::DeregisterVariant { receipt, should_delete };
         self.sender.send(msg).expect("MessageStateManagerActor.deregister : All receivers have died.");
-    }
-}
-
-impl MessageStateManager
-{
-    #[cfg_attr(feature = "flame_it", flame)]
-    pub fn route_msg(&mut self, msg: MessageStateManagerMessage) {
-        match msg {
-            MessageStateManagerMessage::RegisterVariant {
-                receipt, visibility_timeout, start_time
-            } =>
-                self.register(receipt, visibility_timeout, start_time),
-            MessageStateManagerMessage::DeregisterVariant { receipt, should_delete } => {
-                self.deregister(receipt, should_delete)
-            }
-        };
     }
 }
 
@@ -1318,7 +1324,7 @@ mod test {
     use xorshift::{self, Rng};
 
     #[test]
-    fn test_thousand() {
+    fn test_hundred() {
         util::set_timer();
         let timer = util::get_timer();
 
@@ -1346,6 +1352,7 @@ mod test {
         // slog_stdlog uses the logger from slog_scope, so set a logger there
         let _guard = slog_scope::set_global_logger(logger);
 
+        thread::sleep(Duration::from_millis(500));
 
         let provider = util::get_profile_provider();
         let queue_name = "local-dev-cobrien-TEST_QUEUE";
@@ -1363,7 +1370,7 @@ mod test {
             |_| {
                 MessageDeleter::new(sqs_client.clone(), queue_url.clone(), throttler.clone())
             },
-            550,
+            5,
             None
         );
 
@@ -1379,7 +1386,7 @@ mod test {
             |actor| {
                 VisibilityTimeoutExtender::new(sqs_client.clone(), queue_url.clone(), deleter.clone())
             },
-            550,
+            5,
             None
         );
 
@@ -1392,7 +1399,7 @@ mod test {
         let consumer_throttler = ConsumerThrottler::new();
         let consumer_throttler = ConsumerThrottlerActor::new(consumer_throttler);
 
-        let state_manager = MessageStateManager::new(buffer, deleter.clone());
+        let state_manager = SqsMessageStateManager::new(buffer, deleter.clone());
         let state_manager = MessageStateManagerActor::new(state_manager);
 
         let processor = MessageHandlerBroker::new(
@@ -1400,16 +1407,16 @@ mod test {
                 let publisher = MessagePublisher::new(sns_client.clone(), state_manager.clone());
                 DelayMessageProcessor::new(publisher, TopicCreator::new(sns_client.clone()))
             },
-            100,
+            1,
             1000,
             state_manager.clone()
         );
 
-        let mut sqs_broker = DelayMessageConsumerBroker::new(
+        let mut sqs_broker = ConsumerBroker::new(
             |actor| {
                 DelayMessageConsumer::new(sqs_client.clone(), queue_url.clone(), metrics.clone(), actor, state_manager.clone(), processor.clone(), throttler.clone())
             },
-            100,
+            1,
             None
         );
 
@@ -1417,33 +1424,23 @@ mod test {
 
         throttler.register_consumer_throttler(consumer_throttler);
 
+        sqs_broker.consume();
         {
-            let mut workers = sqs_broker.workers.iter();
-            let first = workers.next().unwrap();
-            first.consume();
+            // Remove all consumer threads
+            sqs_broker.shut_down();
 
-            time!({
-                for worker in workers {
-                    worker.consume();
+            loop {
+                let count = sns_client.publishes.load(Ordering::Relaxed);
+
+                if count >= 10 {
+                    break
                 }
-                loop {
-                    let count = sqs_client.deletes.load(Ordering::Relaxed);
-
-                    if count < 1_000 {
-
-                    } else {
-                        let count = sqs_client.deletes.store(0, Ordering::Relaxed);
-                        break
-                    }
-                }
-            }, "completed");
+            }
         }
-        // Remove all consumer threads
-        sqs_broker.shut_down();
 
         thread::sleep(Duration::from_secs(5));
 
-        assert!(sns_client.publishes.load(Ordering::Relaxed) == 1000);
+        assert_eq!(sns_client.publishes.load(Ordering::Relaxed), 100);
     }
 
     #[test]
@@ -1474,17 +1471,9 @@ mod test {
 
         // slog_stdlog uses the logger from slog_scope, so set a logger there
         let _guard = slog_scope::set_global_logger(logger);
+        thread::sleep(Duration::from_millis(500));
 
         let mut throttler = Throttler::new();
-
-        let old_limit = throttler.get_inflight_limit();
-
-        for _ in 0..64 {
-            throttler.message_start("receipt".to_owned(), Instant::now());
-            throttler.message_stop("receipt".to_owned(), Instant::now(), false);
-        }
-
-        assert_eq!(old_limit, throttler.get_inflight_limit());
 
         // Given an increase in processing times we expect our inflight message
         // limit to decrease
@@ -1535,6 +1524,9 @@ mod test {
               }))
         );
 
+        // slog_stdlog uses the logger from slog_scope, so set a logger there
+        let _guard = slog_scope::set_global_logger(logger);
+
         let provider = util::get_profile_provider();
         let queue_name = "local-dev-cobrien-TEST_QUEUE";
         let queue_url = "some queue url".to_owned();
@@ -1552,6 +1544,7 @@ mod test {
         deleter.delete_messages(vec![("receipt1".to_owned(), Instant::now())]);
 
         thread::sleep(Duration::from_millis(5));
+
 
         assert_eq!(sqs_client.deletes.load(Ordering::Relaxed), 1);
     }

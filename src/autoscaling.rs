@@ -402,7 +402,7 @@ impl StreamingMedian {
         self.last_median
     }
 
-    /// Returns the last median value without performing any recalculation
+    /// Calculates and returns the median
     ///
     /// # Arguments
     ///

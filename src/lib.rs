@@ -22,7 +22,6 @@ extern crate base64;
 extern crate coco;
 extern crate xorshift;
 extern crate dogstatsd;
-extern crate env_logger;
 extern crate arrayvec;
 extern crate arraydeque;
 extern crate rusoto_sqs;
@@ -46,7 +45,6 @@ extern crate slog_json;
 extern crate uuid;
 extern crate slog_stream;
 extern crate fibers;
-extern crate chrono;
 
 macro_rules! time {
     ($expression:expr) => (
