@@ -491,9 +491,6 @@ mod test {
 
     #[test]
     fn test_median_ascending() {
-        let t = millis(SystemTime::now().duration_since(UNIX_EPOCH).unwrap());
-        let mut rng = Xoroshiro128::from_seed(&[t, 71, 1223]);
-
         let mut median_tracker = StreamingMedian::new();
 
         let mut ascending_iter = 0..;
@@ -508,9 +505,6 @@ mod test {
 
     #[test]
     fn test_median_descending() {
-        let t = millis(SystemTime::now().duration_since(UNIX_EPOCH).unwrap());
-        let mut rng = Xoroshiro128::from_seed(&[t, 71, 1223]);
-
         let mut median_tracker = StreamingMedian::new();
 
         let mut ascending_iter = 200_000..;
@@ -544,7 +538,7 @@ mod bench {
     #[bench]
     fn bench_insert_and_calculate_rand(b: &mut Bencher) {
         let t = millis(SystemTime::now().duration_since(UNIX_EPOCH).unwrap());
-        let mut rng = Xoroshiro128::from_seed(&[t, 71, 1223]);
+        let rng = Xoroshiro128::from_seed(&[t, 71, 1223]);
 
         let mut median_tracker = StreamingMedian::new();
 

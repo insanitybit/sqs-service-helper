@@ -581,7 +581,7 @@ mod test {
             assert_eq!(*count, 0);
         }
 
-        let msg = processor_receiver
+        processor_receiver
             .try_recv()
             .expect("Processor never received a message");
 
@@ -597,7 +597,7 @@ mod test {
 
         let mut receipt_count = HashMap::new();
 
-        let (msg_starts, msg_stops): (Vec<_>, _) =
+        let (msg_starts, _msg_stops): (Vec<_>, _) =
             throttler_msgs.into_iter().partition(
                 |m| {
                     match *m {

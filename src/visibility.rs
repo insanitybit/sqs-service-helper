@@ -960,60 +960,25 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
 mod test {
     use super::*;
     use mocks::*;
-    use rusoto_sqs;
-    use rusoto_credential::*;
-    use rusoto_sns::*;
-    use two_lock_queue::channel;
-    use std::sync::*;
-    use std::collections::VecDeque;
-    use std;
-    use std::mem::forget;
-    use std::fs::OpenOptions;
-    use slog;
-    use slog_json;
-
-    use slog_stdlog;
-    use slog::{Drain, FnValue};
-    use base64::encode;
-    use serde_json;
-    use delay::DelayMessage;
     #[cfg(feature = "flame_it")]
     use flame;
-    use std::fs::File;
-    use uuid::Uuid;
-    use std::sync::{Arc, Mutex};
-
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use fibers;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
     use processor::*;
     use consumer::*;
-    use visibility::*;
-    use autoscaling::*;
-    use delete::*;
     use publish::*;
-    use itertools::Itertools;
-    use futures_cpupool::CpuPool;
-    use dogstatsd::{Client, Options};
-    use hyper;
     use util;
     use util::TopicCreator;
-    use xorshift::{self, Rng};
 
     #[test]
     fn test_hundred() {
         let logger = util::init_logger("test_hundred.log");
 
         util::set_timer();
-        let timer = util::get_timer();
 
-
-        thread::sleep(Duration::from_millis(500));
-
-        let queue_name = "local-dev-cobrien-TEST_QUEUE";
         let queue_url = "some queue url".to_owned();
 
         let sqs_client = Arc::new(new_sqs_client());
-
 
         let throttler = MedianThrottler::new(logger.clone());
         let throttler = ThrottlerActor::new(throttler);
@@ -1035,7 +1000,7 @@ mod test {
         let sns_client = Arc::new(new_sns_client());
 
         let broker = VisibilityTimeoutExtenderBroker::new(
-            |actor| {
+            |_| {
                 VisibilityTimeoutExtender::new(sqs_client.clone(),
                                                queue_url.clone(),
                                                deleter.clone(),
@@ -1051,7 +1016,7 @@ mod test {
         let buffer = VisibilityTimeoutExtenderBufferActor::new(buffer);
 
         let flusher = BufferFlushTimer::new(buffer.clone(), Duration::from_millis(200));
-        let flusher = BufferFlushTimerActor::new(flusher);
+        let _flusher = BufferFlushTimerActor::new(flusher);
 
         let consumer_throttler = ConsumerThrottler::new(logger.clone());
         let consumer_throttler = ConsumerThrottlerActor::new(consumer_throttler);
@@ -1124,15 +1089,12 @@ mod test {
         let logger = util::init_logger("test_deleter.log");
 
         util::set_timer();
-        let timer = util::get_timer();
 
-
-        let queue_name = "local-dev-cobrien-TEST_QUEUE";
         let queue_url = "some queue url".to_owned();
 
         let sqs_client = Arc::new(new_sqs_client());
 
-        let mut deleter = MessageDeleter::new(sqs_client.clone(), queue_url.clone(), logger.clone());
+        let deleter = MessageDeleter::new(sqs_client.clone(), queue_url.clone(), logger.clone());
 
         deleter.delete_messages(vec![("receipt1".to_owned(), Instant::now())]);
 
