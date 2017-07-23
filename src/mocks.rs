@@ -18,7 +18,6 @@ use std::fs::OpenOptions;
 use slog;
 use slog_json;
 
-use slog_stdlog;
 use slog::{Drain, FnValue};
 use base64::encode;
 use serde_json;

@@ -11,15 +11,12 @@ extern crate flame;
 
 #[macro_use]
 extern crate slog;
-extern crate slog_scope;
-extern crate slog_stdlog;
 extern crate slog_term;
 
 #[macro_use]
 extern crate serde_derive;
 
 extern crate base64;
-extern crate coco;
 extern crate xorshift;
 extern crate dogstatsd;
 extern crate arrayvec;
@@ -35,39 +32,12 @@ extern crate threadpool;
 extern crate futures_cpupool;
 extern crate rusoto_credential;
 extern crate two_lock_queue;
-extern crate itertools;
 extern crate serde;
 extern crate serde_json;
 extern crate lru_time_cache;
 extern crate parking_lot;
-extern crate stopwatch;
 extern crate slog_json;
 extern crate uuid;
-extern crate slog_stream;
-extern crate fibers;
-
-macro_rules! time {
-    ($expression:expr) => (
-        {
-            let mut sw = $crate::stopwatch::Stopwatch::start_new();
-            let exp = $expression;
-            sw.stop();
-            println!("{} took {}ms",stringify!($expression) , sw.elapsed_ms());
-            exp
-//              $expression
-        }
-    );
-    ($expression:expr, $s:expr) => (
-        {
-            let mut sw = $crate::stopwatch::Stopwatch::start_new();
-            let exp = $expression;
-            sw.stop();
-            println!("{} took {}ms", stringify!($s), sw.elapsed_ms());
-            exp
-//              $expression
-        }
-    );
-}
 
 macro_rules! timeout_ms {
     ($pool:expr, $closure:expr, $dur:expr) => {
@@ -102,8 +72,6 @@ pub mod util;
 pub mod visibility;
 
 mod mocks;
-mod queue;
-
 
 #[cfg(test)]
 mod tests {

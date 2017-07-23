@@ -12,6 +12,7 @@ use slog::Logger;
 use two_lock_queue::{unbounded, Sender, Receiver, RecvTimeoutError, channel};
 
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{Sender as MpscSender, channel as mpsc_channel};
 use std::iter::{Iterator, FromIterator};
 use std::thread;
 use std::time::{Instant, Duration};
@@ -104,7 +105,7 @@ pub enum MessageStateManagerMessage {
 
 #[derive(Clone)]
 pub struct MessageStateManagerActor {
-    pub sender: Sender<MessageStateManagerMessage>,
+    pub sender: MpscSender<MessageStateManagerMessage>,
     id: String,
 }
 
@@ -115,14 +116,13 @@ impl MessageStateManagerActor {
         where M: MessageStateManager + Send + 'static
     {
         let mut actor = actor;
-        let (sender, receiver) = unbounded();
+        let (sender, receiver) = mpsc_channel();
         let id = uuid::Uuid::new_v4().to_string();
-        let recvr = receiver.clone();
 
         thread::spawn(
             move || {
                 loop {
-                    match recvr.recv_timeout(Duration::from_secs(60)) {
+                    match receiver.recv_timeout(Duration::from_secs(60)) {
                         Ok(msg) => {
                             actor.route_msg(msg);
                             continue
@@ -204,7 +204,7 @@ pub enum VisibilityTimeoutMessage {
 
 #[derive(Clone)]
 pub struct VisibilityTimeoutActor {
-    sender: Sender<VisibilityTimeoutMessage>,
+    sender: MpscSender<VisibilityTimeoutMessage>,
     id: String,
 }
 
@@ -212,28 +212,23 @@ impl VisibilityTimeoutActor {
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new(actor: VisibilityTimeout, logger: Logger) -> VisibilityTimeoutActor
     {
-        let (sender, receiver): (Sender<VisibilityTimeoutMessage>, Receiver<VisibilityTimeoutMessage>) = unbounded();
+        let (sender, receiver) = mpsc_channel();
         let id = uuid::Uuid::new_v4().to_string();
-        let recvr = receiver.clone();
 
         thread::spawn(move || {
             let mut dur = Duration::from_secs(30); // Default, minimal timeout
             let mut _start_time = None;
 
             loop {
-                let recvr = recvr.clone();
                 let actor = actor.clone();
                 let receipt = actor.receipt.clone();
-                let res = recvr.recv_timeout(dur / 2);
+                let res = receiver.recv_timeout(dur / 2);
 
                 match res {
                     Ok(msg) => {
                         match msg {
                             VisibilityTimeoutMessage::StartVariant { init_timeout, start_time } => {
                                 actor.buf.extend(receipt.clone(), init_timeout, start_time, false);
-
-                                // we can't afford to not flush the initial timeout
-                                actor.buf.flush();
 
                                 dur = init_timeout;
                                 _start_time = Some(start_time);
@@ -613,7 +608,7 @@ pub enum BufferFlushTimerMessage {
 
 #[derive(Clone)]
 pub struct BufferFlushTimerActor {
-    sender: Sender<BufferFlushTimerMessage>,
+    sender: MpscSender<BufferFlushTimerMessage>,
     id: String,
 }
 
@@ -621,17 +616,15 @@ impl BufferFlushTimerActor {
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new(actor: BufferFlushTimer) -> BufferFlushTimerActor
     {
-        let (sender, receiver) = unbounded();
+        let (sender, receiver) = mpsc_channel();
         let id = uuid::Uuid::new_v4().to_string();
-        let recvr = receiver.clone();
 
         thread::spawn(move || {
             loop {
-                let recvr = recvr.clone();
                 let actor = actor.clone();
                 let dur = actor.period; // Default, minimal timeout
 
-                let res = recvr.recv_timeout(dur);
+                let res = receiver.recv_timeout(dur);
 
                 match res {
                     Ok(msg) => {
@@ -887,11 +880,10 @@ impl VisibilityTimeoutExtenderActor {
 
         let mut _actor = new(actor.clone());
 
-        let recvr = receiver.clone();
         thread::spawn(
             move || {
                 loop {
-                    match recvr.recv_timeout(Duration::from_secs(60)) {
+                    match receiver.recv_timeout(Duration::from_secs(60)) {
                         Ok(msg) => {
                             _actor.route_msg(msg);
                         }
@@ -913,12 +905,11 @@ impl VisibilityTimeoutExtenderActor {
         let mut actor = actor;
         let (sender, receiver) = unbounded();
         let id = uuid::Uuid::new_v4().to_string();
-        let recvr = receiver.clone();
 
         thread::spawn(
             move || {
                 loop {
-                    match recvr.recv_timeout(Duration::from_secs(60)) {
+                    match receiver.recv_timeout(Duration::from_secs(60)) {
                         Ok(msg) => {
                             actor.route_msg(msg);
                         }
@@ -1102,4 +1093,23 @@ mod test {
 
         assert_eq!(sqs_client.deletes.load(Ordering::Relaxed), 1);
     }
+}
+
+#[cfg(not(test))]
+mod bench {
+    #![allow(unused_imports)]
+    use super::*;
+    use test::Bencher;
+    use xorshift::{Xoroshiro128, Rng, SeedableRng};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[bench]
+    fn bench_time_to_register(b: &mut Bencher) {
+        let mut median_tracker = StreamingMedian::new();
+
+        b.iter(|| {
+            median_tracker.insert_and_calculate(100);
+        });
+    }
+
 }

@@ -52,22 +52,22 @@ pub fn millis(d: Duration) -> u64 {
 pub fn new_sqs_client<P>(sqs_provider: &P) -> SqsClient<P, hyper::Client>
     where P: ProvideAwsCredentials + Clone + Send + 'static
 {
-    time!(SqsClient::new(
+    SqsClient::new(
         default_tls_client().unwrap(),
         sqs_provider.clone(),
         Region::UsEast1
-    ), "SqsClient")
+    )
 }
 
 #[cfg_attr(feature = "flame_it", flame)]
 pub fn new_sns_client<P>(sns_provider: &P) -> SnsClient<P, hyper::Client>
     where P: ProvideAwsCredentials + Clone + Send + 'static
 {
-    time!(SnsClient::new(
+    SnsClient::new(
         default_tls_client().unwrap(),
         sns_provider.clone(),
         Region::UsEast1
-    ), "SnsClient")
+    )
 }
 
 
