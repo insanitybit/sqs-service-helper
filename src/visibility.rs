@@ -711,6 +711,12 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
                         self.retry_extend(to_retry, 0);
                     }
                     trace!(slog_scope::logger(), "Successfully updated visibilities for {} messages", t.successful.len());
+
+                    for successful in t.successful {
+                        let now = Instant::now();
+                        let (ref receipt, _, _) = id_map[&successful.id];
+                        self.throttler.message_stop(receipt.to_owned(), now, true);
+                    }
                     break
                 }
                 Err(e) => {
@@ -773,6 +779,11 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
                         let mut to_retry = Vec::with_capacity(t.failed.len());
                         for failed in t.failed.clone() {
                             to_retry.push(id_map[&failed.id].clone());
+                        }
+                        for successful in t.successful {
+                            let now = Instant::now();
+                            let (ref receipt, _, _) = id_map[&successful.id];
+                            self.throttler.message_stop(receipt.to_owned(), now, true);
                         }
                         thread::sleep(Duration::from_millis(5 * attempts as u64 + 1));
                         self.retry_extend(to_retry, attempts + 1);

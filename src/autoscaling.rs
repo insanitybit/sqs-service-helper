@@ -241,7 +241,7 @@ impl Throttler {
                 } else {
                     new_max as usize
                 };
-
+                
                 if last_limit != self.inflight_limit {
                     debug!(slog_scope::logger(),
                            "Setting new inflight limit to : {} from {}",
