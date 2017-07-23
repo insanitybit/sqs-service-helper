@@ -158,6 +158,7 @@ pub struct ThrottlerActor
 pub struct Throttler {
     throttler: Option<ConsumerThrottlerActor>,
     inflight_timings: LruCache<String, Instant>,
+    previously_seen: LruCache<String, ()>,
     proc_times: StreamingMedian,
     inflight_limit: usize,
 }
@@ -165,20 +166,29 @@ pub struct Throttler {
 impl Throttler {
     pub fn new() -> Throttler {
         let inflight_timings =
-            LruCache::with_expiry_duration(Duration::from_secs(12 * 60 * 60));
+            LruCache::with_expiry_duration_and_capacity(Duration::from_secs(12 * 60 * 60),
+                                                        120_000);
+        let previously_seen =
+            LruCache::with_expiry_duration_and_capacity(Duration::from_secs(12 * 60 * 60),
+            120_000);
+
         let proc_times = StreamingMedian::new();
+
         Throttler {
             throttler: None,
             inflight_timings,
+            previously_seen,
             proc_times,
             inflight_limit: 10,
         }
     }
 
     pub fn message_start(&mut self, receipt: String, time_started: Instant) {
-        if self.inflight_timings.insert(receipt, time_started).is_some() {
+        if self.inflight_timings.insert(receipt.clone(), time_started).is_some() {
             error!(slog_scope::logger(), "Message starting twice");
         }
+
+        self.previously_seen.insert(receipt, ());
 
         let processing_time = self.proc_times.last() as u64;
 
@@ -222,6 +232,12 @@ impl Throttler {
     }
 
     pub fn message_stop(&mut self, receipt: String, time_stopped: Instant, success: bool) {
+
+        // We're only interested in the initial time it took to get to the visibility extender
+        if self.previously_seen.get(&receipt).is_some() {
+            return
+        }
+
         // Get the time that the messagae was started
         let start_time = self.inflight_timings.remove(&receipt);
 
@@ -241,7 +257,7 @@ impl Throttler {
                 } else {
                     new_max as usize
                 };
-                
+
                 if last_limit != self.inflight_limit {
                     debug!(slog_scope::logger(),
                            "Setting new inflight limit to : {} from {}",
