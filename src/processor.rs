@@ -8,7 +8,7 @@ use rusoto_sqs::Message as SqsMessage;
 use two_lock_queue::{Sender, Receiver, RecvTimeoutError, unbounded, channel};
 use std::time::Duration;
 use rusoto_sns::Sns;
-use slog_scope;
+
 use slog::Logger;
 use util::TopicCreator;
 use uuid::Uuid;
@@ -49,7 +49,6 @@ impl<SN> DelayMessageProcessor<SN>
 #[derive(Clone)]
 pub struct MessageHandlerActor {
     sender: Sender<SqsMessage>,
-    receiver: Receiver<SqsMessage>,
     id: String
 }
 
@@ -70,56 +69,22 @@ impl MessageHandlerActor {
 
         let actor = MessageHandlerActor {
             sender: sender.clone(),
-            receiver: receiver.clone(),
-            id: id,
+            id,
         };
 
-        let mut state_manager = state_manager;
         let mut _actor = new(actor.clone());
 
-        let recvr = receiver.clone();
         thread::spawn(
             move || {
-                loop {
-                    match recvr.recv_timeout(Duration::from_secs(60)) {
-                        Ok(msg) => {
-                            let receipt = match msg.receipt_handle.clone() {
-                                Some(r) => r,
-                                None => {
-                                    error!(logger,
-                                           "Missing receipt handle");
-                                    continue
-                                }
-                            };
-
-                            match _actor.process_message(msg) {
-                                Ok(_) => {
-                                    state_manager.deregister(receipt.clone(), true);
-                                }
-                                Err(e) => {
-                                    error!(
-                                        logger,
-                                        "Actor failed to process message: {}",
-                                        e
-                                    );
-                                    state_manager.deregister(receipt.clone(), false);
-                                }
-                            }
-
-                            if let Some(ref sc) = short_circuit {
-                                let mut short_circuit = sc.lock().unwrap();
-                                short_circuit.insert(receipt.clone(), ());
-                            }
-                        }
-                        Err(RecvTimeoutError::Disconnected) => {
-                            break
-                        }
-                        Err(RecvTimeoutError::Timeout) => {
-                            continue
-                        }
-                    }
-                }
+                MessageHandlerActor::actor_loop(
+                    logger,
+                    receiver,
+                    short_circuit,
+                    _actor,
+                    state_manager
+                )
             });
+
         actor
     }
 
@@ -138,55 +103,69 @@ impl MessageHandlerActor {
 
         let actor = MessageHandlerActor {
             sender: sender.clone(),
-            receiver: receiver.clone(),
-            id: id,
+            id,
         };
 
-        let mut state_manager = state_manager;
         let mut _actor = new(actor.clone());
 
-        let recvr = receiver.clone();
         thread::spawn(
             move || {
-                loop {
-                    match recvr.recv_timeout(Duration::from_secs(60)) {
-                        Ok(msg) => {
-                            let receipt = match msg.receipt_handle.clone() {
-                                Some(r) => r,
-                                None => {
-                                    error!(logger, "Missing receipt handle");
-                                    continue
-                                }
-                            };
-
-                            match _actor.process_message(msg) {
-                                Ok(_) => {
-                                    state_manager.deregister(receipt.clone(), true);
-                                }
-                                Err(e) => {
-                                    error!(
-                                        logger,
-                                        "Actor failed to process message: {}",
-                                        e
-                                    );
-                                    state_manager.deregister(receipt.clone(), false);
-                                }
-                            }
-
-                            if let Some(ref sc) = short_circuit {
-                                let mut short_circuit = sc.lock().unwrap();
-                                short_circuit.insert(receipt.clone(), ());
-                            }
-                        }
-                        Err(RecvTimeoutError::Disconnected) => {
-                            break
-                        }
-                        Err(RecvTimeoutError::Timeout) => {}
-                    }
-                }
+                MessageHandlerActor::actor_loop(
+                    logger,
+                    receiver,
+                    short_circuit,
+                    _actor,
+                    state_manager
+                )
             });
 
         actor
+    }
+
+    fn actor_loop<M, P>(logger: Logger,
+                        recvr: Receiver<SqsMessage>,
+                        short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>,
+                        mut actor: P,
+                        mut state_manager: M)
+        where M: MessageStateManager + Clone + Send + 'static,
+              P: MessageHandler + Send + 'static,
+    {
+        loop {
+            match recvr.recv_timeout(Duration::from_secs(60)) {
+                Ok(msg) => {
+                    let receipt = match msg.receipt_handle.clone() {
+                        Some(r) => r,
+                        None => {
+                            error!(logger, "Missing receipt handle");
+                            continue
+                        }
+                    };
+
+                    match actor.process_message(msg) {
+                        Ok(_) => {
+                            state_manager.deregister(receipt.clone(), true);
+                        }
+                        Err(e) => {
+                            error!(
+                                logger,
+                                "Actor failed to process message: {}",
+                                e
+                            );
+                            state_manager.deregister(receipt.clone(), false);
+                        }
+                    }
+
+                    if let Some(ref sc) = short_circuit {
+                        let mut short_circuit = sc.lock().unwrap();
+                        short_circuit.insert(receipt.clone(), ());
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    break
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+        }
     }
 }
 

@@ -7,7 +7,7 @@ use arrayvec::ArrayVec;
 use uuid;
 use lru_time_cache::LruCache;
 use rusoto_sqs::{Sqs, ChangeMessageVisibilityBatchRequestEntry, ChangeMessageVisibilityBatchRequest};
-use slog_scope;
+
 use slog::Logger;
 use two_lock_queue::{unbounded, Sender, Receiver, RecvTimeoutError, channel};
 
@@ -205,7 +205,6 @@ pub enum VisibilityTimeoutMessage {
 #[derive(Clone)]
 pub struct VisibilityTimeoutActor {
     sender: Sender<VisibilityTimeoutMessage>,
-    receiver: Receiver<VisibilityTimeoutMessage>,
     id: String,
 }
 
@@ -273,9 +272,8 @@ impl VisibilityTimeoutActor {
         });
 
         VisibilityTimeoutActor {
-            sender: sender,
-            receiver: receiver,
-            id: id,
+            sender,
+            id,
         }
     }
 
@@ -616,7 +614,6 @@ pub enum BufferFlushTimerMessage {
 #[derive(Clone)]
 pub struct BufferFlushTimerActor {
     sender: Sender<BufferFlushTimerMessage>,
-    receiver: Receiver<BufferFlushTimerMessage>,
     id: String,
 }
 
@@ -657,9 +654,8 @@ impl BufferFlushTimerActor {
         });
 
         BufferFlushTimerActor {
-            sender: sender,
-            receiver: receiver,
-            id: id,
+            sender,
+            id,
         }
     }
 
@@ -870,7 +866,6 @@ pub enum VisibilityTimeoutExtenderMessage {
 #[derive(Clone)]
 pub struct VisibilityTimeoutExtenderActor {
     sender: Sender<VisibilityTimeoutExtenderMessage>,
-    receiver: Receiver<VisibilityTimeoutExtenderMessage>,
     id: String,
 }
 
@@ -887,8 +882,7 @@ impl VisibilityTimeoutExtenderActor {
 
         let actor = VisibilityTimeoutExtenderActor {
             sender: sender.clone(),
-            receiver: receiver.clone(),
-            id: id,
+            id,
         };
 
         let mut _actor = new(actor.clone());
@@ -937,9 +931,8 @@ impl VisibilityTimeoutExtenderActor {
             });
 
         VisibilityTimeoutExtenderActor {
-            sender: sender,
-            receiver: receiver,
-            id: id,
+            sender,
+            id,
         }
     }
 
@@ -978,7 +971,7 @@ mod test {
     use std::fs::OpenOptions;
     use slog;
     use slog_json;
-    use slog_scope;
+
     use slog_stdlog;
     use slog::{Drain, FnValue};
     use base64::encode;

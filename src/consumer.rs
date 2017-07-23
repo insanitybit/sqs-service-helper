@@ -1,15 +1,14 @@
-use std::time::{Instant, Duration};
-use std::thread;
-
-use rusoto_sqs::{Sqs, ReceiveMessageRequest};
-use dogstatsd::Client;
-use std::sync::Arc;
-use slog::Logger;
-use slog_scope;
 use visibility::*;
 use autoscaling::*;
-use uuid;
 use processor::*;
+
+use rusoto_sqs::{Sqs, ReceiveMessageRequest};
+use slog::Logger;
+use uuid;
+
+use std::time::{Instant, Duration};
+use std::thread;
+use std::sync::Arc;
 
 use two_lock_queue::{Sender, Receiver, RecvTimeoutError, unbounded, channel};
 
@@ -162,9 +161,7 @@ pub enum ConsumerMessage
 pub struct ConsumerActor
 {
     sender: Sender<ConsumerMessage>,
-    receiver: Receiver<ConsumerMessage>,
     p_sender: Sender<ConsumerMessage>,
-    p_receiver: Receiver<ConsumerMessage>,
     id: String
 }
 
@@ -182,9 +179,7 @@ impl ConsumerActor
 
         let actor = ConsumerActor {
             sender,
-            receiver: receiver.clone(),
             p_sender,
-            p_receiver: p_receiver.clone(),
             id,
         };
 
@@ -232,10 +227,8 @@ impl ConsumerActor
 
         let actor = ConsumerActor {
             sender,
-            receiver: receiver.clone(),
             p_sender,
-            p_receiver: p_receiver.clone(),
-            id: id,
+            id,
         };
 
         let mut _actor = new(actor.clone());
@@ -440,9 +433,7 @@ pub enum ConsumerThrottlerMessage
 pub struct ConsumerThrottlerActor
 {
     sender: Sender<ConsumerThrottlerMessage>,
-    receiver: Receiver<ConsumerThrottlerMessage>,
     p_sender: Sender<ConsumerThrottlerMessage>,
-    p_receiver: Receiver<ConsumerThrottlerMessage>,
     id: String
 }
 
@@ -462,7 +453,7 @@ impl ConsumerThrottlerActor
         thread::spawn(
             move || {
                 loop {
-                    if let Ok(msg) = recvr.try_recv() {
+                    if let Ok(msg) = p_receiver.try_recv() {
                         actor.route_msg(msg);
                     }
 
@@ -480,9 +471,7 @@ impl ConsumerThrottlerActor
 
         ConsumerThrottlerActor {
             sender: sender.clone(),
-            receiver: receiver.clone(),
             p_sender: p_sender.clone(),
-            p_receiver: p_receiver.clone(),
             id: id,
         }
     }

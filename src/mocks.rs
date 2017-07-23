@@ -17,7 +17,7 @@ use std::mem::forget;
 use std::fs::OpenOptions;
 use slog;
 use slog_json;
-use slog_scope;
+
 use slog_stdlog;
 use slog::{Drain, FnValue};
 use base64::encode;

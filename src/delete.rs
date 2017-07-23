@@ -113,7 +113,6 @@ pub enum MessageDeleterMessage {
 #[derive(Clone)]
 pub struct MessageDeleterActor {
     sender: Sender<MessageDeleterMessage>,
-    receiver: Receiver<MessageDeleterMessage>,
     id: String,
 }
 
@@ -145,9 +144,8 @@ impl MessageDeleterActor {
             });
 
         MessageDeleterActor {
-            sender: sender,
-            receiver: receiver,
-            id: id,
+            sender,
+            id,
         }
     }
 
@@ -164,8 +162,7 @@ impl MessageDeleterActor {
 
         let actor = MessageDeleterActor {
             sender: sender.clone(),
-            receiver: receiver.clone(),
-            id: id,
+            id,
         };
 
         let mut _actor = new(actor.clone());
@@ -295,7 +292,6 @@ pub enum MessageDeleteBufferMessage {
 #[derive(Clone)]
 pub struct MessageDeleteBufferActor {
     sender: Sender<MessageDeleteBufferMessage>,
-    receiver: Receiver<MessageDeleteBufferMessage>,
     id: String,
 }
 
@@ -330,9 +326,8 @@ impl MessageDeleteBufferActor {
             });
 
         MessageDeleteBufferActor {
-            sender: sender,
-            receiver: receiver,
-            id: id,
+            sender,
+            id,
         }
     }
 

@@ -1,6 +1,6 @@
 use arraydeque::ArrayDeque;
 use lru_time_cache::LruCache;
-use two_lock_queue::{Sender, Receiver, RecvTimeoutError, unbounded};
+use two_lock_queue::{Sender, RecvTimeoutError, unbounded};
 use uuid;
 use std::cmp::{min, max, Ordering};
 use std::iter::{self, FromIterator};
@@ -37,7 +37,6 @@ pub enum ThrottlerMessage {
 pub struct ThrottlerActor
 {
     sender: Sender<ThrottlerMessage>,
-    receiver: Receiver<ThrottlerMessage>,
     id: String
 }
 
@@ -239,7 +238,6 @@ impl ThrottlerActor
 
         ThrottlerActor {
             sender: sender.clone(),
-            receiver: receiver.clone(),
             id: id,
         }
     }
@@ -528,6 +526,7 @@ mod test {
 
 #[cfg(not(test))]
 mod bench {
+    #![allow(unused_imports)]
     use super::*;
     use test::Bencher;
     use xorshift::{Xoroshiro128, Rng, SeedableRng};

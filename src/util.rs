@@ -4,8 +4,7 @@ use std::fs::OpenOptions;
 use slog;
 use slog::Logger;
 use slog_json;
-use slog_scope;
-use slog_stdlog;
+
 use slog::{Drain, FnValue};
 use futures_cpupool::CpuPool;
 use tokio_timer::*;

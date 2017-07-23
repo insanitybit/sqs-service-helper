@@ -5,7 +5,7 @@ use uuid;
 use std::time::{Duration};
 use rusoto_sns::{Sns, PublishInput};
 use delay::DelayMessage;
-use slog_scope;
+
 use slog::Logger;
 use std::sync::Arc;
 use std::iter::Iterator;
@@ -94,7 +94,6 @@ pub enum MessagePublisherMessage {
 #[derive(Clone)]
 pub struct MessagePublisherActor {
     sender: Sender<MessagePublisherMessage>,
-    receiver: Receiver<MessagePublisherMessage>,
     id: String,
 }
 
@@ -127,9 +126,8 @@ impl MessagePublisherActor {
             });
 
         MessagePublisherActor {
-            sender: sender,
-            receiver: receiver,
-            id: id,
+            sender,
+            id,
         }
     }
 
@@ -146,8 +144,7 @@ impl MessagePublisherActor {
 
         let actor = MessagePublisherActor {
             sender: sender.clone(),
-            receiver: receiver.clone(),
-            id: id,
+            id,
         };
 
         let mut _actor = new(actor.clone());
