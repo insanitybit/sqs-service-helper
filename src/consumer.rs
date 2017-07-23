@@ -19,39 +19,37 @@ pub trait Consumer {
     fn throttle(&mut self, Duration);
     fn shut_down(&mut self);
     fn route_msg(&mut self, ConsumerMessage);
-
 }
 
-pub struct DelayMessageConsumer<SQ>
-    where SQ: Sqs + Send + Sync + 'static,
+pub struct DelayMessageConsumer<C, SQ>
+    where C: Consumer + Send + 'static,
+          SQ: Sqs + Send + Sync + 'static,
 {
     sqs_client: Arc<SQ>,
     queue_url: String,
-    metrics: Arc<Client>,
-    actor: ConsumerActor,
+    actor: C,
     vis_manager: MessageStateManagerActor,
     processor: MessageHandlerBroker,
     throttler: ThrottlerActor,
     throttle: Duration
 }
 
-impl<SQ> DelayMessageConsumer<SQ>
-    where SQ: Sqs + Send + Sync + 'static,
+impl<C, SQ> DelayMessageConsumer<C, SQ>
+    where C: Consumer + Send + 'static,
+          SQ: Sqs + Send + Sync + 'static,
 {
     #[cfg_attr(feature="flame_it", flame)]
     pub fn new(sqs_client: Arc<SQ>,
                queue_url: String,
-               metrics: Arc<Client>,
-               actor: ConsumerActor,
+               actor: C,
                vis_manager: MessageStateManagerActor,
                processor: MessageHandlerBroker,
                throttler: ThrottlerActor)
-               -> DelayMessageConsumer<SQ>
+               -> DelayMessageConsumer<C, SQ>
     {
         DelayMessageConsumer {
             sqs_client,
             queue_url,
-            metrics,
             actor,
             vis_manager,
             processor,
@@ -75,8 +73,9 @@ impl<SQ> DelayMessageConsumer<SQ>
     }
 }
 
-impl<SQ> Consumer for DelayMessageConsumer<SQ>
-    where SQ: Sqs + Send + Sync + 'static,
+impl<C, SQ> Consumer for DelayMessageConsumer<C, SQ>
+    where C: Consumer + Send + 'static,
+          SQ: Sqs + Send + Sync + 'static,
 {
     #[cfg_attr(feature="flame_it", flame)]
     fn consume(&mut self) {
@@ -503,5 +502,37 @@ impl ConsumerThrottlerActor
     pub fn drop_consumer(&self) {
         self.p_sender.send(ConsumerThrottlerMessage::DropConsumer)
             .expect("Underlying consumer has died");
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use mocks::*;
+
+
+    #[test]
+    pub fn test_consumer() {
+        let mock_consumer = MockConsumer::new();
+        let mock_state_manager = MockMessageStateManager::new();
+
+        let mock_processor_broker = MessageHandlerBroker::new(
+            move || {
+                MockProcessor::new()
+            },
+            1,
+            None,
+            mock_state_manager.clone(),
+            None
+        );
+
+//        let consumer = DelayMessageConsumer::new(
+//            new_sqs_client(),
+//            "".to_owned(),
+//            mock_consumer,
+//            mock_state_manager,
+//            mock_processor_broker,
+//
+//        );
     }
 }
