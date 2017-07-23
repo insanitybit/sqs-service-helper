@@ -1,5 +1,6 @@
 #![allow(warnings)]
 
+use autoscaling::*;
 use visibility::*;
 use consumer::*;
 use processor::*;
@@ -43,6 +44,39 @@ pub fn new_sns_client() -> MockSns
 {
     MockSns {
         publishes: Arc::new(AtomicUsize::new(0))
+    }
+}
+
+#[derive(Clone)]
+pub struct MockThrottler {
+    pub sender: Sender<ThrottlerMessage>,
+    pub receiver: Receiver<ThrottlerMessage>,
+}
+
+impl MockThrottler {
+    pub fn new() -> MockThrottler {
+        let (sender, receiver) = unbounded();
+
+        MockThrottler {
+            sender,
+            receiver
+        }
+    }
+}
+
+impl Throttler for MockThrottler {
+    fn message_start(&mut self, receipt: String, time_started: Instant) {
+        self.sender.send(ThrottlerMessage::Start {
+            receipt,
+            time_started
+        });
+    }
+
+    fn message_stop(&mut self, receipt: String, time_stopped: Instant) {
+        self.sender.send(ThrottlerMessage::Stop {
+            receipt,
+            time_stopped,
+        });
     }
 }
 

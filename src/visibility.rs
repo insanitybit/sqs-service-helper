@@ -88,6 +88,7 @@ impl MessageStateManager for SqsMessageStateManager {
     }
 }
 
+#[derive(Debug)]
 pub enum MessageStateManagerMessage {
     RegisterVariant {
         receipt: String,
@@ -137,9 +138,12 @@ impl MessageStateManagerActor {
             id: id,
         }
     }
+}
+
+impl MessageStateManager for MessageStateManagerActor {
 
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn register(&self, receipt: String, visibility_timeout: Duration, start_time: Instant) {
+    fn register(&mut self, receipt: String, visibility_timeout: Duration, start_time: Instant) {
         let msg = MessageStateManagerMessage::RegisterVariant {
             receipt,
             visibility_timeout,
@@ -149,9 +153,13 @@ impl MessageStateManagerActor {
     }
 
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn deregister(&self, receipt: String, should_delete: bool) {
+    fn deregister(&mut self, receipt: String, should_delete: bool) {
         let msg = MessageStateManagerMessage::DeregisterVariant { receipt, should_delete };
         self.sender.send(msg).expect("MessageStateManagerActor.deregister : All receivers have died.");
+    }
+
+    fn route_msg(&mut self, msg: MessageStateManagerMessage) {
+        self.sender.send(msg).unwrap();
     }
 }
 
@@ -180,6 +188,7 @@ impl VisibilityTimeout
     }
 }
 
+#[derive(Debug)]
 pub enum VisibilityTimeoutMessage {
     StartVariant {
         init_timeout: Duration,
@@ -423,6 +432,7 @@ pub fn get_short_circuit() -> Arc<Mutex<LruCache<String, ()>>> {
     )
 }
 
+#[derive(Debug)]
 pub enum VisibilityTimeoutExtenderBufferMessage {
     Extend { receipt: String, timeout: Duration, start_time: Instant, should_delete: bool },
     Flush {},
@@ -595,6 +605,7 @@ impl BufferFlushTimer
     }
 }
 
+#[derive(Debug)]
 pub enum BufferFlushTimerMessage {
     StartVariant,
     End,
@@ -754,7 +765,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
                     for successful in t.successful {
                         let now = Instant::now();
                         let (ref receipt, _, _) = id_map[&successful.id];
-                        self.throttler.message_stop(receipt.to_owned(), now, true);
+                        self.throttler.message_stop(receipt.to_owned(), now);
                     }
                     break
                 }
@@ -822,7 +833,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
                         for successful in t.successful {
                             let now = Instant::now();
                             let (ref receipt, _, _) = id_map[&successful.id];
-                            self.throttler.message_stop(receipt.to_owned(), now, true);
+                            self.throttler.message_stop(receipt.to_owned(), now);
                         }
                         thread::sleep(Duration::from_millis(5 * attempts as u64 + 1));
                         self.retry_extend(to_retry, attempts + 1);
@@ -844,6 +855,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
     }
 }
 
+#[derive(Debug)]
 pub enum VisibilityTimeoutExtenderMessage {
     ExtendVariant {
         timeout_info: Vec<(String, Duration, Instant, bool)>,
@@ -1026,7 +1038,7 @@ mod test {
         let sqs_client = Arc::new(new_sqs_client());
 
 
-        let throttler = Throttler::new();
+        let throttler = MedianThrottler::new();
         let throttler = ThrottlerActor::new(throttler);
 
         let deleter = MessageDeleterBroker::new(
@@ -1139,14 +1151,14 @@ mod test {
         let _guard = slog_scope::set_global_logger(logger);
         thread::sleep(Duration::from_millis(500));
 
-        let mut throttler = Throttler::new();
+        let mut throttler = MedianThrottler::new();
 
         // Given an increase in processing times we expect our inflight message
         // limit to decrease
         for _ in 0..64 {
             throttler.message_start("receipt".to_owned(), Instant::now());
             thread::sleep(Duration::from_millis(10));
-            throttler.message_stop("receipt".to_owned(), Instant::now(), true);
+            throttler.message_stop("receipt".to_owned(), Instant::now());
         }
 
         let old_limit = throttler.get_inflight_limit();
@@ -1154,7 +1166,7 @@ mod test {
         for _ in 0..64 {
             throttler.message_start("receipt".to_owned(), Instant::now());
             thread::sleep(Duration::from_millis(50));
-            throttler.message_stop("receipt".to_owned(), Instant::now(), true);
+            throttler.message_stop("receipt".to_owned(), Instant::now());
         }
 
         let new_limit = throttler.get_inflight_limit();

@@ -101,6 +101,7 @@ impl<SQ> MessageDeleter<SQ>
     }
 }
 
+#[derive(Debug)]
 pub enum MessageDeleterMessage {
     DeleteMessages {
         receipts: Vec<(String, Instant)>,
@@ -279,6 +280,7 @@ impl MessageDeleteBuffer {
     }
 }
 
+#[derive(Debug)]
 pub enum MessageDeleteBufferMessage {
     Delete {
         receipt: String,

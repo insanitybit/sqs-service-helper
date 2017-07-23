@@ -21,31 +21,35 @@ pub trait Consumer {
     fn route_msg(&mut self, ConsumerMessage);
 }
 
-pub struct DelayMessageConsumer<C, SQ>
+pub struct DelayMessageConsumer<C, M, T, SQ>
     where C: Consumer + Send + 'static,
+          M: MessageStateManager + Send + 'static,
+          T: Throttler + Send + 'static,
           SQ: Sqs + Send + Sync + 'static,
 {
     sqs_client: Arc<SQ>,
     queue_url: String,
     actor: C,
-    vis_manager: MessageStateManagerActor,
+    vis_manager: M,
     processor: MessageHandlerBroker,
-    throttler: ThrottlerActor,
+    throttler: T,
     throttle: Duration
 }
 
-impl<C, SQ> DelayMessageConsumer<C, SQ>
+impl<C, M, T, SQ> DelayMessageConsumer<C, M, T, SQ>
     where C: Consumer + Send + 'static,
+          M: MessageStateManager + Send + 'static,
+          T: Throttler + Send + 'static,
           SQ: Sqs + Send + Sync + 'static,
 {
     #[cfg_attr(feature="flame_it", flame)]
     pub fn new(sqs_client: Arc<SQ>,
                queue_url: String,
                actor: C,
-               vis_manager: MessageStateManagerActor,
+               vis_manager: M,
                processor: MessageHandlerBroker,
-               throttler: ThrottlerActor)
-               -> DelayMessageConsumer<C, SQ>
+               throttler: T)
+               -> DelayMessageConsumer<C, M, T, SQ>
     {
         DelayMessageConsumer {
             sqs_client,
@@ -57,24 +61,12 @@ impl<C, SQ> DelayMessageConsumer<C, SQ>
             throttle: Duration::from_millis(500)
         }
     }
-
-    fn wait(&self) {
-        let init_backoff = 10;
-        let mut backoff = init_backoff;
-        let max_backoff = 100;
-        while self.vis_manager.sender.len() > MAX_INFLIGHT_MESSAGES {
-            thread::sleep(Duration::from_millis(backoff));
-            if backoff * 2 <  max_backoff{
-                backoff *= 2;
-            } else {
-                backoff = init_backoff;
-            }
-        }
-    }
 }
 
-impl<C, SQ> Consumer for DelayMessageConsumer<C, SQ>
+impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
     where C: Consumer + Send + 'static,
+          M: MessageStateManager + Send + 'static,
+          T: Throttler + Send + 'static,
           SQ: Sqs + Send + Sync + 'static,
 {
     #[cfg_attr(feature="flame_it", flame)]
@@ -155,6 +147,7 @@ impl<C, SQ> Consumer for DelayMessageConsumer<C, SQ>
     }
 }
 
+#[derive(Debug)]
 pub enum ConsumerMessage
 {
     Consume,
@@ -271,25 +264,29 @@ impl ConsumerActor
 
         actor
     }
+}
 
+impl Consumer for ConsumerActor {
     #[cfg_attr(feature="flame_it", flame)]
-    pub fn consume(&self) {
+    fn consume(&mut self) {
         self.sender.send(ConsumerMessage::Consume)
             .expect("Underlying consumer has died");
     }
 
     #[cfg_attr(feature="flame_it", flame)]
-    pub fn throttle(&self, how_long: Duration) {
+    fn throttle(&mut self, how_long: Duration) {
         self.p_sender.send(ConsumerMessage::Throttle {how_long})
             .expect("Underlying consumer has died");
     }
 
-    pub fn shut_down(self) {
+    fn shut_down(&mut self) {
         let _ = self.p_sender.send(ConsumerMessage::ShutDown);
     }
+
+    fn route_msg(&mut self, msg: ConsumerMessage) {
+        self.sender.send(msg).unwrap();
+    }
 }
-
-
 
 #[derive(Clone)]
 pub struct ConsumerBroker
@@ -517,7 +514,7 @@ mod test {
         let mock_state_manager = MockMessageStateManager::new();
 
         let mock_processor_broker = MessageHandlerBroker::new(
-            move || {
+            move |_| {
                 MockProcessor::new()
             },
             1,
@@ -526,13 +523,28 @@ mod test {
             None
         );
 
-//        let consumer = DelayMessageConsumer::new(
-//            new_sqs_client(),
-//            "".to_owned(),
-//            mock_consumer,
-//            mock_state_manager,
-//            mock_processor_broker,
-//
-//        );
+
+        let throttler = MockThrottler::new();
+
+        let mut consumer = DelayMessageConsumer::new(
+            Arc::new(new_sqs_client()),
+            "".to_owned(),
+            mock_consumer.clone(),
+            mock_state_manager.clone(),
+            mock_processor_broker.clone(),
+            throttler.clone()
+        );
+
+        consumer.consume();
+        consumer.shut_down();
+
+        thread::sleep(Duration::from_secs(2));
+
+        let msg = mock_consumer.receiver.try_recv().unwrap();
+//        match msg {
+//            ConsumerMessage::Consume => (),
+//            m   => panic!("Expected the mock_consumer to have a consumer message {:#?}",
+//                          m)
+//        }
     }
 }

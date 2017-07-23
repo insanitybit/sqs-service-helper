@@ -15,128 +15,21 @@ use slog_scope;
 
 type CurrentActors = usize;
 
-pub enum ScaleMetric {
-    QueueDepth {
-        depth: usize,
-        current_actor_count: usize
-    },
-    ProcessingTime {
-        process_time: Duration,
-        current_actor_count: usize
-    },
-    EmptyReceives {
-        current_actor_count: usize
-    }
+pub trait Throttler {
+    fn message_start(&mut self, identifier: String, time_started: Instant);
+    fn message_stop(&mut self, identifier: String, time_stopped: Instant);
 }
 
-pub enum ScaleMessage {
-    Up(usize),
-    Down(usize)
-}
-
-pub trait Scalable {
-    fn scale(&mut self, scale: ScaleMessage);
-}
-
-pub struct ScalingPolicy
-{
-    /// Minimum number of actors to scale down to
-    min_actors: usize,
-    /// Maximum number of actors to scale up to
-    max_actors: usize,
-    /// The minimum duration between emitting scaling commands
-    wait_time: Duration,
-    /// Function to determine how to scale
-    should_scale: Box<Fn(ScaleMetric) -> Option<ScaleMessage>>
-}
-
-impl ScalingPolicy
-{
-    pub fn new(min_actors: usize, max_actors: usize, wait_time: Duration, should_scale: Box<Fn(ScaleMetric) -> Option<ScaleMessage>>)
-               -> ScalingPolicy {
-        ScalingPolicy {
-            min_actors,
-            max_actors,
-            wait_time,
-            should_scale
-        }
-    }
-
-    pub fn default_algorithm(min_actors: usize, max_actors: usize, wait_time: Duration)
-                             -> ScalingPolicy {
-        ScalingPolicy {
-            min_actors,
-            max_actors,
-            wait_time,
-            should_scale: Box::new(move |metric| {
-                match metric {
-                    ScaleMetric::EmptyReceives { current_actor_count } => {
-                        if current_actor_count > min_actors {
-                            Some(ScaleMessage::Down(current_actor_count - 1))
-                        } else {
-                            None
-                        }
-                    }
-                    ScaleMetric::ProcessingTime { process_time, current_actor_count } => {
-                        if current_actor_count < max_actors && process_time > Duration::from_secs(2) {
-                            Some(ScaleMessage::Up(current_actor_count + 1))
-                        } else {
-                            None
-                        }
-                    }
-                    ScaleMetric::QueueDepth { depth, current_actor_count } => {
-                        if current_actor_count < max_actors {
-                            if depth > 1000 {
-                                Some(ScaleMessage::Up(max_actors))
-                            } else if depth > 100 {
-                                let new_count = min(current_actor_count + 2, max_actors);
-                                Some(ScaleMessage::Up(new_count))
-                            } else if depth > 10 {
-                                Some(ScaleMessage::Up(current_actor_count + 1))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }
-                }
-            })
-        }
-    }
-}
-
-pub struct AutoScaler<A>
-    where A: Scalable,
-{
-    /// The actor to communicate scaling commands to
-    scalable: A,
-    /// The policy to determine how to scale
-    policy: ScalingPolicy
-}
-
-impl<A> AutoScaler<A>
-    where A: Scalable,
-{
-    pub fn new(scalable: A, policy: ScalingPolicy) -> AutoScaler<A> {
-        AutoScaler {
-            scalable,
-            policy
-        }
-    }
-}
-
-enum ThrottlerMessage {
-    MessageStart {
+pub enum ThrottlerMessage {
+    Start {
         receipt: String,
         time_started: Instant
     },
-    MessageStop {
+    Stop {
         receipt: String,
         time_stopped: Instant,
-        success: bool
     },
-    RegisterConsumerThrottler {
+    RegisterThrottled {
         throttler: ConsumerThrottlerActor
     }
 }
@@ -149,13 +42,13 @@ pub struct ThrottlerActor
     id: String
 }
 
-/// Throttler tracks the processing time for messages from the consumer to the
+/// MedianThrottler tracks the processing time for messages from the consumer to the
 /// deleter. It then uses this information to calculate how many messages we can
 /// process in 30 seconds, the time it takes for a message to time out. Ideally
 /// we process as many messages as we can while ensuring that we don't back our
 /// message visibility handlers up, which could lead to more frequent double
 /// processing.
-pub struct Throttler {
+pub struct MedianThrottler {
     throttler: Option<ConsumerThrottlerActor>,
     inflight_timings: LruCache<String, Instant>,
     previously_seen: LruCache<String, ()>,
@@ -163,8 +56,8 @@ pub struct Throttler {
     inflight_limit: usize,
 }
 
-impl Throttler {
-    pub fn new() -> Throttler {
+impl MedianThrottler {
+    pub fn new() -> MedianThrottler {
         let inflight_timings =
             LruCache::with_expiry_duration_and_capacity(Duration::from_secs(12 * 60 * 60),
                                                         120_000);
@@ -174,7 +67,7 @@ impl Throttler {
 
         let proc_times = StreamingMedian::new();
 
-        Throttler {
+        MedianThrottler {
             throttler: None,
             inflight_timings,
             previously_seen,
@@ -183,7 +76,44 @@ impl Throttler {
         }
     }
 
-    pub fn message_start(&mut self, receipt: String, time_started: Instant) {
+    pub fn register_consumer_throttler(&mut self,
+                                       consumer_throttler: ConsumerThrottlerActor)
+    {
+        self.throttler = Some(consumer_throttler);
+    }
+
+    // Given a timeout of n seconds, and our current processing times,
+    // what is the number of messages we can process within that timeout
+    fn get_max_backlog(&self, dur: Duration, proc_time: u32) -> u64 {
+        let max_ms = millis(dur) as u32;
+
+        if proc_time == 0 {
+            return 0;
+        }
+
+        let max_msgs = max_ms / proc_time;
+
+        max(max_msgs, 1) as u64
+    }
+
+    fn route_msg(&mut self, msg: ThrottlerMessage) {
+        match msg {
+            ThrottlerMessage::Start { receipt, time_started } =>
+                self.message_start(receipt, time_started),
+            ThrottlerMessage::Stop { receipt, time_stopped } =>
+                self.message_stop(receipt, time_stopped),
+            ThrottlerMessage::RegisterThrottled { throttler } =>
+                self.register_consumer_throttler(throttler)
+        }
+    }
+
+    pub fn get_inflight_limit(&self) -> usize {
+        self.inflight_limit
+    }
+}
+
+impl Throttler for MedianThrottler {
+    fn message_start(&mut self, receipt: String, time_started: Instant) {
         if self.inflight_timings.insert(receipt.clone(), time_started).is_some() {
             error!(slog_scope::logger(), "Message starting twice");
         }
@@ -231,7 +161,7 @@ impl Throttler {
         }
     }
 
-    pub fn message_stop(&mut self, receipt: String, time_stopped: Instant, success: bool) {
+    fn message_stop(&mut self, receipt: String, time_stopped: Instant) {
 
         // We're only interested in the initial time it took to get to the visibility extender
         if self.previously_seen.get(&receipt).is_some() {
@@ -244,7 +174,7 @@ impl Throttler {
         match start_time {
             // We are only interested in timings for successfully processed messages, at least
             // in part because this is likely the slowest path and we want to throttle accordingly
-            Some(start_time) if success => {
+            Some(start_time) => {
                 // Calculate the time it took from message consumption to delete
                 let proc_time = millis(time_stopped - start_time) as u32;
 
@@ -269,48 +199,14 @@ impl Throttler {
             _ => {
                 warn!(slog_scope::logger(),
                       "Attempting to deregister timeout that does not exist:\
-                receipt: {} success: {}", receipt, success);
+                receipt: {}", receipt);
             }
         };
     }
 
-    pub fn register_consumer_throttler(&mut self,
-                                       consumer_throttler: ConsumerThrottlerActor)
-    {
-        self.throttler = Some(consumer_throttler);
-    }
-
-    // Given a timeout of n seconds, and our current processing times,
-    // what is the number of messages we can process within that timeout
-    fn get_max_backlog(&self, dur: Duration, proc_time: u32) -> u64 {
-        let max_ms = millis(dur) as u32;
-
-        if proc_time == 0 {
-            return 0;
-        }
-
-        let max_msgs = max_ms / proc_time;
-
-        max(max_msgs, 1) as u64
-    }
-
-    fn route_msg(&mut self, msg: ThrottlerMessage) {
-        match msg {
-            ThrottlerMessage::MessageStart { receipt, time_started } =>
-                self.message_start(receipt, time_started),
-            ThrottlerMessage::MessageStop { receipt, time_stopped, success } =>
-                self.message_stop(receipt, time_stopped, success),
-            ThrottlerMessage::RegisterConsumerThrottler { throttler } =>
-                self.register_consumer_throttler(throttler)
-        }
-    }
-
-    pub fn get_inflight_limit(&self) -> usize {
-        self.inflight_limit
-    }
 }
 
-impl Default for Throttler {
+impl Default for MedianThrottler {
     fn default() -> Self {
         Self::new()
     }
@@ -319,7 +215,7 @@ impl Default for Throttler {
 impl ThrottlerActor
 {
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new(actor: Throttler)
+    pub fn new(actor: MedianThrottler)
                -> ThrottlerActor
     {
         let (sender, receiver) = unbounded();
@@ -353,26 +249,28 @@ impl ThrottlerActor
         }
     }
 
-    pub fn message_start(&self, receipt: String, time_started: Instant) {
-        self.sender.send(ThrottlerMessage::MessageStart {
+    pub fn register_consumer_throttler(&self, consumer_throttler: ConsumerThrottlerActor) {
+        self.sender
+            .send(ThrottlerMessage::RegisterThrottled { throttler: consumer_throttler })
+            .expect("ThrottlerActor.register_consumer_throttler: receivers have died.");
+    }
+}
+
+impl Throttler for ThrottlerActor {
+    fn message_start(&mut self, receipt: String, time_started: Instant) {
+        self.sender.send(ThrottlerMessage::Start {
             receipt,
             time_started
         }).expect("ThrottlerActor.message_start: receivers have died.");
     }
 
-    pub fn message_stop(&self, receipt: String, time_stopped: Instant, success: bool) {
-        self.sender.send(ThrottlerMessage::MessageStop {
+    fn message_stop(&mut self, receipt: String, time_stopped: Instant) {
+        self.sender.send(ThrottlerMessage::Stop {
             receipt,
             time_stopped,
-            success
         }).expect("ThrottlerActor.message_stop: receivers have died.");
     }
 
-    pub fn register_consumer_throttler(&self, consumer_throttler: ConsumerThrottlerActor) {
-        self.sender
-            .send(ThrottlerMessage::RegisterConsumerThrottler { throttler: consumer_throttler })
-            .expect("ThrottlerActor.register_consumer_throttler: receivers have died.");
-    }
 }
 
 /// `StreamingMedian` provides a simple interface for inserting values

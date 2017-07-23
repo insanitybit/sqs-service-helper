@@ -111,6 +111,7 @@ pub fn get_profile_provider() -> ChainProvider {
 
 use lru_time_cache::LruCache;
 
+#[derive(Debug)]
 pub enum Topic {
     Cached(String),
     Created(String)

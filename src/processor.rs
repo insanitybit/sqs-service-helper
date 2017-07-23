@@ -51,13 +51,14 @@ pub struct MessageHandlerActor {
 
 impl MessageHandlerActor {
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn from_queue<P, F>(new: &F,
+    pub fn from_queue<M, P, F>(new: &F,
                             sender: Sender<SqsMessage>,
                             receiver: Receiver<SqsMessage>,
-                            state_manager: MessageStateManagerActor,
+                            state_manager: M,
                             short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
                             -> MessageHandlerActor
-        where P: MessageHandler + Send + 'static,
+        where M: MessageStateManager + Clone + Send + 'static,
+              P: MessageHandler + Send + 'static,
               F: Fn(MessageHandlerActor) -> P
     {
         let id = Uuid::new_v4().to_string();
@@ -68,6 +69,7 @@ impl MessageHandlerActor {
             id: id,
         };
 
+        let mut state_manager = state_manager;
         let mut _actor = new(actor.clone());
 
         let recvr = receiver.clone();
@@ -114,11 +116,12 @@ impl MessageHandlerActor {
     }
 
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new<P, F>(new: F,
-                     state_manager: MessageStateManagerActor,
+    pub fn new<M, P, F>(new: F,
+                     state_manager: M,
                      short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
                      -> MessageHandlerActor
-        where P: MessageHandler + Send + 'static,
+        where M: MessageStateManager + Clone + Send + 'static,
+              P: MessageHandler + Send + 'static,
               F: FnOnce(MessageHandlerActor) -> P
     {
         let (sender, receiver) = channel(100);
@@ -130,6 +133,7 @@ impl MessageHandlerActor {
             id: id,
         };
 
+        let mut state_manager = state_manager;
         let mut _actor = new(actor.clone());
 
         let recvr = receiver.clone();
@@ -186,13 +190,14 @@ pub struct MessageHandlerBroker
 impl MessageHandlerBroker
 {
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new<P, T, F>(new: F,
+    pub fn new<M, P, T, F>(new: F,
                         worker_count: usize,
                         max_queue_depth: T,
-                        state_manager: MessageStateManagerActor,
+                        state_manager: M,
                         short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
                         -> MessageHandlerBroker
         where P: MessageHandler + Send + 'static,
+              M: MessageStateManager + Clone + Send + 'static,
               F: Fn(MessageHandlerActor) -> P,
               T: Into<Option<usize>>,
     {

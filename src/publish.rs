@@ -30,7 +30,7 @@ impl<SN> MessagePublisher<SN>
     }
 
     #[cfg_attr(feature="flame_it", flame)]
-    pub fn publish_and_delete(&self, msg: DelayMessage, topic_arn: String, receipt: String) {
+    pub fn publish_and_delete(&mut self, msg: DelayMessage, topic_arn: String, receipt: String) {
         match self.publish(msg.message, topic_arn) {
             Ok(_)   => {
                 self.vis_manager.deregister(receipt.clone(), true);
@@ -69,7 +69,7 @@ impl<SN> MessagePublisher<SN>
     }
 
     #[cfg_attr(feature="flame_it", flame)]
-    pub fn route_msg(&self, msg: MessagePublisherMessage) {
+    pub fn route_msg(&mut self, msg: MessagePublisherMessage) {
         match msg {
             MessagePublisherMessage::PublishAndDelete {message, topic_arn, receipt}  =>
                 self.publish_and_delete(message, topic_arn, receipt)
@@ -77,6 +77,7 @@ impl<SN> MessagePublisher<SN>
     }
 }
 
+#[derive(Debug)]
 pub enum MessagePublisherMessage {
     PublishAndDelete {
         message: DelayMessage,
@@ -97,6 +98,7 @@ impl MessagePublisherActor {
     pub fn new<SN>(actor: MessagePublisher<SN>) -> MessagePublisherActor
         where SN: Sns + Send + Sync + 'static,
     {
+        let mut actor = actor;
         let (sender, receiver) = unbounded();
         let id = uuid::Uuid::new_v4().to_string();
         let recvr = receiver.clone();
