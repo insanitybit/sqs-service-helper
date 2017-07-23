@@ -523,7 +523,6 @@ mod test {
             None
         );
 
-
         let throttler = MockThrottler::new();
 
         let mut consumer = DelayMessageConsumer::new(
@@ -540,11 +539,11 @@ mod test {
 
         thread::sleep(Duration::from_secs(2));
 
-        let msg = mock_consumer.receiver.try_recv().unwrap();
-//        match msg {
-//            ConsumerMessage::Consume => (),
-//            m   => panic!("Expected the mock_consumer to have a consumer message {:#?}",
-//                          m)
-//        }
+        let msg = mock_state_manager.receiver.try_recv().unwrap();
+        let msg = match msg {
+            m @ MessageStateManagerMessage::RegisterVariant {..} => m,
+            m   => panic!("Expected registration of consumer message, got {:#?}",
+                          m)
+        };
     }
 }

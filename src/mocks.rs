@@ -97,6 +97,27 @@ impl MockConsumer {
     }
 }
 
+impl Consumer for MockConsumer {
+    fn consume(&mut self) {
+        self.sender.send(ConsumerMessage::Consume)
+            .expect("MockConsumer panicked at consume");
+    }
+
+    fn throttle(&mut self, how_long: Duration) {
+        self.sender.send(ConsumerMessage::Throttle { how_long })
+            .expect("MockConsumer panicked at throttle");
+    }
+
+    fn shut_down(&mut self) {
+        self.sender.send(ConsumerMessage::ShutDown)
+            .expect("MockConsumer panicked at shut_down");
+    }
+
+    fn route_msg(&mut self, msg: ConsumerMessage) {
+        self.sender.send(msg).unwrap();
+    }
+}
+
 #[derive(Clone)]
 pub struct MockProcessor {
     pub sender: Sender<SqsMessage>,
@@ -139,30 +160,23 @@ impl MockMessageStateManager {
 }
 
 impl MessageStateManager for MockMessageStateManager {
-    fn register(&mut self, receipt: String, timeout: Duration, now: Instant) {
-
+    fn register(&mut self, receipt: String, visibility_timeout: Duration, start_time: Instant) {
+        self.sender.send(
+            MessageStateManagerMessage::RegisterVariant {
+                receipt, visibility_timeout, start_time
+            }
+        ).unwrap();
     }
 
-    fn deregister(&mut self, receipt: String, success: bool) {
-
+    fn deregister(&mut self, receipt: String, should_delete: bool) {
+        self.sender.send(
+            MessageStateManagerMessage::DeregisterVariant {
+                receipt, should_delete
+            }
+        ).unwrap();
     }
 
     fn route_msg(&mut self, msg: MessageStateManagerMessage) {
-        self.sender.send(msg).unwrap();
-    }
-}
-
-impl Consumer for MockConsumer {
-    fn consume(&mut self) {
-
-    }
-    fn throttle(&mut self, how_long: Duration) {
-
-    }
-    fn shut_down(&mut self) {
-
-    }
-    fn route_msg(&mut self, msg: ConsumerMessage) {
         self.sender.send(msg).unwrap();
     }
 }
