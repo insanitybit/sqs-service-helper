@@ -2,7 +2,7 @@ use std::time::{Instant, Duration};
 use std::thread;
 
 use rusoto_sqs::{Sqs, ReceiveMessageRequest};
-use dogstatsd::{Client};
+use dogstatsd::Client;
 use std::sync::Arc;
 use slog_scope;
 use visibility::*;
@@ -42,7 +42,7 @@ impl<C, M, T, SQ> DelayMessageConsumer<C, M, T, SQ>
           T: Throttler + Send + 'static,
           SQ: Sqs + Send + Sync + 'static,
 {
-    #[cfg_attr(feature="flame_it", flame)]
+    #[cfg_attr(feature = "flame_it", flame)]
     pub fn new(sqs_client: Arc<SQ>,
                queue_url: String,
                actor: C,
@@ -69,7 +69,7 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
           T: Throttler + Send + 'static,
           SQ: Sqs + Send + Sync + 'static,
 {
-    #[cfg_attr(feature="flame_it", flame)]
+    #[cfg_attr(feature = "flame_it", flame)]
     fn consume(&mut self) {
         let msg_request = ReceiveMessageRequest {
             max_number_of_messages: Some(10),
@@ -109,7 +109,7 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
                         self.throttler.message_start(receipt.to_owned(), now);
                         Some(msg)
                     }
-                    _   => None
+                    _ => None
                 }
             }).collect();
 
@@ -118,6 +118,7 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
             for message in messages {
                 self.processor.process(message.clone());
             }
+
             if dur < self.throttle {
                 thread::sleep(self.throttle - dur);
             }
@@ -129,18 +130,16 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
         self.throttle = how_long;
     }
 
-    fn shut_down(&mut self) {
-
-    }
+    fn shut_down(&mut self) {}
 
     fn route_msg(&mut self, msg: ConsumerMessage) {
         match msg {
-            ConsumerMessage::Consume  => self.consume(),
-            ConsumerMessage::Throttle {how_long}    => self.throttle(how_long),
+            ConsumerMessage::Consume => self.consume(),
+            ConsumerMessage::Throttle { how_long } => self.throttle(how_long),
             ConsumerMessage::ShutDown => {
                 self.shut_down();
-                return
-            },
+                return;
+            }
         };
 
         self.actor.consume();
@@ -151,7 +150,7 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
 pub enum ConsumerMessage
 {
     Consume,
-    Throttle {how_long: Duration},
+    Throttle { how_long: Duration },
     ShutDown
 }
 
@@ -167,9 +166,9 @@ pub struct ConsumerActor
 
 impl ConsumerActor
 {
-    #[cfg_attr(feature="flame_it", flame)]
+    #[cfg_attr(feature = "flame_it", flame)]
     pub fn new<C, F>(new: F)
-                      -> ConsumerActor
+                     -> ConsumerActor
         where C: Consumer + Send + 'static,
               F: Fn(ConsumerActor) -> C,
     {
@@ -215,7 +214,7 @@ impl ConsumerActor
         actor
     }
 
-    #[cfg_attr(feature="flame_it", flame)]
+    #[cfg_attr(feature = "flame_it", flame)]
     pub fn from_queue<C, F>(new: &F,
                             sender: Sender<ConsumerMessage>,
                             receiver: Receiver<ConsumerMessage>,
@@ -267,15 +266,15 @@ impl ConsumerActor
 }
 
 impl Consumer for ConsumerActor {
-    #[cfg_attr(feature="flame_it", flame)]
+    #[cfg_attr(feature = "flame_it", flame)]
     fn consume(&mut self) {
         self.sender.send(ConsumerMessage::Consume)
             .expect("Underlying consumer has died");
     }
 
-    #[cfg_attr(feature="flame_it", flame)]
+    #[cfg_attr(feature = "flame_it", flame)]
     fn throttle(&mut self, how_long: Duration) {
-        self.p_sender.send(ConsumerMessage::Throttle {how_long})
+        self.p_sender.send(ConsumerMessage::Throttle { how_long })
             .expect("Underlying consumer has died");
     }
 
@@ -301,11 +300,11 @@ pub struct ConsumerBroker
 
 impl ConsumerBroker
 {
-    #[cfg_attr(feature="flame_it", flame)]
+    #[cfg_attr(feature = "flame_it", flame)]
     pub fn new<T, C, F>(new: F,
-                         worker_count: usize,
-                         max_queue_depth: T)
-                         -> ConsumerBroker
+                        worker_count: usize,
+                        max_queue_depth: T)
+                        -> ConsumerBroker
         where C: Consumer + Send + 'static,
               F: Fn(ConsumerActor) -> C,
               T: Into<Option<usize>>,
@@ -359,20 +358,19 @@ impl ConsumerBroker
         self.worker_count = 0;
     }
 
-    #[cfg_attr(feature="flame_it", flame)]
+    #[cfg_attr(feature = "flame_it", flame)]
     pub fn consume(&self) {
         self.sender.send(
             ConsumerMessage::Consume
         ).unwrap();
     }
 
-    #[cfg_attr(feature="flame_it", flame)]
+    #[cfg_attr(feature = "flame_it", flame)]
     pub fn throttle(&self, how_long: Duration) {
         self.sender.send(
-            ConsumerMessage::Throttle {how_long}
+            ConsumerMessage::Throttle { how_long }
         ).unwrap();
     }
-
 }
 
 #[derive(Clone, Default)]
@@ -382,7 +380,7 @@ pub struct ConsumerThrottler {
 
 impl ConsumerThrottler {
     pub fn new()
-    -> ConsumerThrottler {
+        -> ConsumerThrottler {
         ConsumerThrottler {
             consumer_broker: None,
         }
@@ -394,8 +392,8 @@ impl ConsumerThrottler {
                 for _ in 0..consumer_broker.worker_count {
                     consumer_broker.throttle(how_long)
                 }
-            },
-            None    => error!(slog_scope::logger(), "No consumer registered with ConsumerThrottler")
+            }
+            None => error!(slog_scope::logger(), "No consumer registered with ConsumerThrottler")
         }
     }
 
@@ -413,8 +411,8 @@ impl ConsumerThrottler {
 
     fn route_msg(&mut self, msg: ConsumerThrottlerMessage) {
         match msg {
-            ConsumerThrottlerMessage::Throttle {how_long} => self.throttle(how_long),
-            ConsumerThrottlerMessage::RegisterconsumerBroker {consumer} => self.register_consumer(consumer),
+            ConsumerThrottlerMessage::Throttle { how_long } => self.throttle(how_long),
+            ConsumerThrottlerMessage::RegisterconsumerBroker { consumer } => self.register_consumer(consumer),
             ConsumerThrottlerMessage::DropConsumer => self.drop_consumer(),
             ConsumerThrottlerMessage::AddConsumer => self.add_consumer(),
         }
@@ -423,8 +421,8 @@ impl ConsumerThrottler {
 
 pub enum ConsumerThrottlerMessage
 {
-    Throttle {how_long: Duration},
-    RegisterconsumerBroker {consumer: ConsumerBroker },
+    Throttle { how_long: Duration },
+    RegisterconsumerBroker { consumer: ConsumerBroker },
     DropConsumer,
     AddConsumer,
 }
@@ -443,7 +441,7 @@ impl ConsumerThrottlerActor
 {
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new(actor: ConsumerThrottler)
-                      -> ConsumerThrottlerActor
+               -> ConsumerThrottlerActor
     {
         let (sender, receiver) = unbounded();
         let (p_sender, p_receiver) = unbounded();
@@ -466,8 +464,7 @@ impl ConsumerThrottlerActor
                         Err(RecvTimeoutError::Disconnected) => {
                             break
                         }
-                        Err(RecvTimeoutError::Timeout) => {
-                        }
+                        Err(RecvTimeoutError::Timeout) => {}
                     }
                 }
             });
@@ -482,12 +479,12 @@ impl ConsumerThrottlerActor
     }
 
     pub fn register_consumer(&self, consumer: ConsumerBroker) {
-        self.sender.send(ConsumerThrottlerMessage::RegisterconsumerBroker {consumer})
+        self.sender.send(ConsumerThrottlerMessage::RegisterconsumerBroker { consumer })
             .expect("ConsumerThrottlerActor.register_consumer receivers have died");
     }
 
     pub fn throttle(&self, how_long: Duration) {
-        self.p_sender.send(ConsumerThrottlerMessage::Throttle {how_long})
+        self.p_sender.send(ConsumerThrottlerMessage::Throttle { how_long })
             .expect("Underlying consumer has died");
     }
 
@@ -507,15 +504,20 @@ mod test {
     use super::*;
     use mocks::*;
 
+    use std::collections::HashMap;
 
     #[test]
     pub fn test_consumer() {
         let mock_consumer = MockConsumer::new();
         let mock_state_manager = MockMessageStateManager::new();
 
+        let (processor_sender, processor_receiver) = unbounded();
+
+        let sndr = processor_sender.clone();
+        let rcvr = processor_receiver.clone();
         let mock_processor_broker = MessageHandlerBroker::new(
             move |_| {
-                MockProcessor::new()
+                MockProcessor::from_queue(sndr.clone(), rcvr.clone())
             },
             1,
             None,
@@ -539,11 +541,78 @@ mod test {
 
         thread::sleep(Duration::from_secs(2));
 
-        let msg = mock_state_manager.receiver.try_recv().unwrap();
-        let msg = match msg {
-            m @ MessageStateManagerMessage::RegisterVariant {..} => m,
-            m   => panic!("Expected registration of consumer message, got {:#?}",
-                          m)
-        };
+        let mut state_msgs = vec![];
+
+        loop {
+            match mock_state_manager.receiver.try_recv() {
+                Ok(msg) => state_msgs.push(msg),
+                _ => break
+            }
+        }
+
+        let mut receipt_count = HashMap::new();
+
+        let (registers, deregisters): (Vec<_>, _) =
+            state_msgs.into_iter().partition(
+                |m| {
+                    match *m {
+                        MessageStateManagerMessage::RegisterVariant { ref receipt, .. }
+                        => {
+                            *receipt_count.entry(receipt.clone()).or_insert(0) += 1;
+                            true
+                        },
+                        MessageStateManagerMessage::DeregisterVariant { ref receipt, .. }
+                        => {
+                            *receipt_count.entry(receipt.clone()).or_insert(0) -= 1;
+                            false
+                        }
+                    }
+                }
+            );
+
+        assert_eq!(registers.len(), deregisters.len());
+
+        // For every receipt there should be one register and one deregister
+        // Registers increment, Deregisters decrement, hence compare to 0
+        for count in receipt_count.values() {
+            assert_eq!(*count, 0);
+        }
+
+        let msg = processor_receiver
+            .try_recv()
+            .expect("Processor never received a message");
+
+
+        let mut throttler_msgs = vec![];
+
+        loop {
+            match throttler.receiver.try_recv() {
+                Ok(m)   => throttler_msgs.push(m),
+                _   => break
+            }
+        }
+
+        let mut receipt_count = HashMap::new();
+
+        let (msg_starts, msg_stops): (Vec<_>, _) =
+            throttler_msgs.into_iter().partition(
+                |m| {
+                    match *m {
+                        ThrottlerMessage::Start { ref receipt, .. }
+                        => {
+                            *receipt_count.entry(receipt.clone()).or_insert(0) += 1;
+                            true
+                        },
+                        ThrottlerMessage::Stop { ref receipt, .. }
+                        => {
+                            *receipt_count.entry(receipt.clone()).or_insert(0) -= 1;
+                            false
+                        },
+                        _   => panic!("Unexpected message")
+                    }
+                }
+            );
+
+        assert_eq!(msg_starts.len(), 10);
     }
 }

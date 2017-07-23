@@ -133,6 +133,16 @@ impl MockProcessor {
             receiver
         }
     }
+
+    pub fn from_queue(sender: Sender<SqsMessage>,
+                          receiver: Receiver<SqsMessage>)
+        -> MockProcessor
+    {
+        MockProcessor {
+            sender,
+            receiver
+        }
+    }
 }
 
 impl MessageHandler for MockProcessor {
