@@ -16,9 +16,9 @@ pub const MAX_INFLIGHT_MESSAGES: usize = 100;
 
 pub trait Consumer {
     fn consume(&mut self);
-    fn throttle(&mut self, Duration);
+    fn throttle(&mut self, how_long: Duration);
     fn shut_down(&mut self);
-    fn route_msg(&mut self, ConsumerMessage);
+    fn route_msg(&mut self, msg: ConsumerMessage);
 }
 
 pub struct DelayMessageConsumer<C, M, T, SQ>

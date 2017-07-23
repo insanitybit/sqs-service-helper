@@ -90,16 +90,18 @@ macro_rules! timeout_ms {
     };
 }
 
-mod mocks;
-pub mod metrics;
-pub mod util;
-pub mod delay;
-pub mod visibility;
-pub mod delete;
-pub mod publish;
-pub mod processor;
-pub mod consumer;
+pub mod actor;
 pub mod autoscaling;
+pub mod consumer;
+pub mod delay;
+pub mod delete;
+pub mod metrics;
+pub mod processor;
+pub mod publish;
+pub mod util;
+pub mod visibility;
+
+mod mocks
 mod queue;
 
 
