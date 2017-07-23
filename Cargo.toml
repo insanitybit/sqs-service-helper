@@ -6,6 +6,8 @@ authors = ["insanitybit <insanitybit@gmail.com>"]
 description = "A library to facilitate SQS based consumer services"
 license = "MIT OR Apache-2.0"
 keywords = ["sqs"]
+repository = "https://github.com/insanitybit/sqs-service-helper"
+readme = "README.md"
 
 [dependencies]
 rand = "0.3.*"
