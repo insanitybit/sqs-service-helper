@@ -11,25 +11,21 @@ subprocess.check_call(['cargo', 'test'])
 print("cargo test --release")
 subprocess.check_call(['cargo', 'test', '--release'])
 
-for sanitizer in ['address', 'thread']:
+for sanitizer in ['address', 'thread', 'leak']:
     print("cargo test sanitizer = {}".format(sanitizer))
 
-    e = dict(os.environ, RUSTFLAGS='-Z sanitizer={}'.format(sanitizer))
+    e = dict(os.environ, ASAN_OPTIONS='detect_odr_violation=0', RUSTFLAGS='-Z sanitizer={}'.format(sanitizer))
 
-    if sanitizer == 'address':
-        e['ASAN_OPTIONS'] = 'detect_odr_violation=0',
     if sanitizer == 'thread':
         e['RUST_TEST_THREADS'] = '1'
 
     subprocess.check_call(['cargo', 'test','--message-format', 'json', '--target', 'x86_64-unknown-linux-gnu'], env=e)
 
-for sanitizer in ['address', 'thread']:
+for sanitizer in ['address', 'thread', 'leak']:
     print("cargo test sanitizer = {}".format(sanitizer))
 
-    e = dict(os.environ, RUSTFLAGS='-Z sanitizer={}'.format(sanitizer))
+    e = dict(os.environ, ASAN_OPTIONS='detect_odr_violation=0', RUSTFLAGS='-Z sanitizer={}'.format(sanitizer))
 
-    if sanitizer == 'address':
-        e['ASAN_OPTIONS'] = 'detect_odr_violation=0',
     if sanitizer == 'thread':
         e['RUST_TEST_THREADS'] = '1'
 
