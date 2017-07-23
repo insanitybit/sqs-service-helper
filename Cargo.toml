@@ -1,8 +1,11 @@
-
 [package]
 name = "sqs-service-helper"
 version = "0.1.0"
 authors = ["insanitybit <insanitybit@gmail.com>"]
+
+description = "A library to facilitate SQS based consumer services"
+license = "MIT OR Apache-2.0"
+keywords = ["sqs"]
 
 [dependencies]
 rand = "0.3.*"
