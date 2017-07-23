@@ -8,6 +8,7 @@ use uuid;
 use lru_time_cache::LruCache;
 use rusoto_sqs::{Sqs, ChangeMessageVisibilityBatchRequestEntry, ChangeMessageVisibilityBatchRequest};
 use slog_scope;
+use slog::Logger;
 use two_lock_queue::{unbounded, Sender, Receiver, RecvTimeoutError, channel};
 
 use std::sync::{Arc, Mutex};
@@ -31,13 +32,15 @@ pub struct SqsMessageStateManager
     timers: LruCache<String, (VisibilityTimeoutActor, Instant)>,
     buffer: VisibilityTimeoutExtenderBufferActor,
     deleter: MessageDeleteBufferActor,
+    logger: Logger
 }
 
 impl SqsMessageStateManager
 {
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new(buffer: VisibilityTimeoutExtenderBufferActor,
-               deleter: MessageDeleteBufferActor) -> SqsMessageStateManager
+               deleter: MessageDeleteBufferActor,
+               logger: Logger) -> SqsMessageStateManager
     {
         // Create the new MessageStateManager with a maximum cache  lifetime of 12 hours, which is
         // the maximum amount of time a message can be kept invisible
@@ -45,6 +48,7 @@ impl SqsMessageStateManager
             timers: LruCache::with_expiry_duration_and_capacity(Duration::from_secs(12 * 60 * 60), 120_000),
             buffer,
             deleter,
+            logger
         }
     }
 }
@@ -53,7 +57,7 @@ impl MessageStateManager for SqsMessageStateManager {
     #[cfg_attr(feature = "flame_it", flame)]
     fn register(&mut self, receipt: String, visibility_timeout: Duration, start_time: Instant) {
         let vis_timeout = VisibilityTimeout::new(self.buffer.clone(), self.deleter.clone(), receipt.clone());
-        let vis_timeout = VisibilityTimeoutActor::new(vis_timeout);
+        let vis_timeout = VisibilityTimeoutActor::new(vis_timeout, self.logger.clone());
         vis_timeout.start(visibility_timeout, start_time);
 
         self.timers.insert(receipt, (vis_timeout, start_time));
@@ -68,7 +72,7 @@ impl MessageStateManager for SqsMessageStateManager {
                 vis_timeout.end(should_delete);
             }
             None => {
-                warn!(slog_scope::logger(), "Attempting to deregister timeout that does not exist:\
+                warn!(self.logger, "Attempting to deregister timeout that does not exist:\
                 receipt: {} should_delete: {}", receipt, should_delete);
             }
         };
@@ -141,7 +145,6 @@ impl MessageStateManagerActor {
 }
 
 impl MessageStateManager for MessageStateManagerActor {
-
     #[cfg_attr(feature = "flame_it", flame)]
     fn register(&mut self, receipt: String, visibility_timeout: Duration, start_time: Instant) {
         let msg = MessageStateManagerMessage::RegisterVariant {
@@ -208,7 +211,7 @@ pub struct VisibilityTimeoutActor {
 
 impl VisibilityTimeoutActor {
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new(actor: VisibilityTimeout) -> VisibilityTimeoutActor
+    pub fn new(actor: VisibilityTimeout, logger: Logger) -> VisibilityTimeoutActor
     {
         let (sender, receiver): (Sender<VisibilityTimeoutMessage>, Receiver<VisibilityTimeoutMessage>) = unbounded();
         let id = uuid::Uuid::new_v4().to_string();
@@ -243,7 +246,7 @@ impl VisibilityTimeoutActor {
                                         actor.buf.extend(receipt.clone(), dur, st, should_delete);
                                     }
                                     None => {
-                                        error!(slog_scope::logger(), "Error, no start time provided")
+                                        error!(logger, "Error, no start time provided")
                                     }
                                 }
                                 return;
@@ -261,7 +264,7 @@ impl VisibilityTimeoutActor {
                                 actor.buf.extend(receipt.clone(), dur, st, false);
                             }
                             None => {
-                                error!(slog_scope::logger(), "No start time provided")
+                                error!(logger, "No start time provided")
                             }
                         }
                     }
@@ -362,7 +365,7 @@ impl VisibilityTimeoutExtenderBuffer
     pub fn new(extender_broker: VisibilityTimeoutExtenderBroker,
                flush_period: u8,
                short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
-        -> VisibilityTimeoutExtenderBuffer
+               -> VisibilityTimeoutExtenderBuffer
 
     {
         VisibilityTimeoutExtenderBuffer {
@@ -376,7 +379,6 @@ impl VisibilityTimeoutExtenderBuffer
 
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn extend(&mut self, receipt: String, timeout: Duration, start_time: Instant, should_delete: bool) {
-
         if self.buffer.is_full() {
             if let Some(ref sc) = self.short_circuit {
                 let mut short_circuit = sc.lock().unwrap();
@@ -385,16 +387,16 @@ impl VisibilityTimeoutExtenderBuffer
                 let shorted_buffer: Vec<_> = self.buffer.iter()
                     .cloned()
                     .filter_map(|(receipt, d, instant, should_delete)| {
-                    if !should_delete && now - instant < Duration::from_secs(26) {
-                        if short_circuit.get(&receipt).is_some() {
-                            None
+                        if !should_delete && now - instant < Duration::from_secs(26) {
+                            if short_circuit.get(&receipt).is_some() {
+                                None
+                            } else {
+                                Some((receipt, d, instant, should_delete))
+                            }
                         } else {
                             Some((receipt, d, instant, should_delete))
                         }
-                    } else {
-                        Some((receipt, d, instant, should_delete))
-                    }
-                }).collect();
+                    }).collect();
 
                 self.buffer = ArrayVec::from_iter(shorted_buffer.into_iter());
             }
@@ -685,7 +687,8 @@ pub struct VisibilityTimeoutExtender<SQ>
     sqs_client: Arc<SQ>,
     queue_url: String,
     throttler: ThrottlerActor,
-    deleter: MessageDeleteBufferActor
+    deleter: MessageDeleteBufferActor,
+    logger: Logger
 }
 
 impl<SQ> VisibilityTimeoutExtender<SQ>
@@ -695,14 +698,16 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
     pub fn new(sqs_client: Arc<SQ>,
                queue_url: String,
                deleter: MessageDeleteBufferActor,
-               throttler: ThrottlerActor)
-        -> VisibilityTimeoutExtender<SQ>
+               throttler: ThrottlerActor,
+               logger: Logger)
+               -> VisibilityTimeoutExtender<SQ>
     {
         VisibilityTimeoutExtender {
             sqs_client,
             queue_url,
             deleter,
             throttler,
+            logger
         }
     }
 
@@ -714,7 +719,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
         let entries: Vec<_> = timeout_info.into_iter().filter_map(|(receipt, timeout, start_time, should_delete)| {
             let now = Instant::now();
             if start_time + timeout < now + Duration::from_millis(10) {
-                error!(slog_scope::logger(), "Message timeout expired before extend: start_time {:#?} timeout {:#?} now {:#?}", start_time, timeout, now);
+                error!(self.logger, "Message timeout expired before extend: start_time {:#?} timeout {:#?} now {:#?}", start_time, timeout, now);
                 if should_delete {
                     to_delete.push((receipt.clone(), start_time));
                 }
@@ -760,7 +765,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
                         }
                         self.retry_extend(to_retry, 0);
                     }
-                    trace!(slog_scope::logger(), "Successfully updated visibilities for {} messages", t.successful.len());
+                    trace!(self.logger, "Successfully updated visibilities for {} messages", t.successful.len());
 
                     for successful in t.successful {
                         let now = Instant::now();
@@ -773,7 +778,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
                     backoff += 1;
                     thread::sleep(Duration::from_secs(20 * backoff));
                     if backoff > 5 {
-                        warn!(slog_scope::logger(), "Failed to change message visibility {}", e);
+                        warn!(self.logger, "Failed to change message visibility {}", e);
                         break
                     } else {
                         continue
@@ -789,7 +794,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
 
     fn retry_extend(&mut self, timeout_info: Vec<(String, Duration, Instant)>, attempts: usize) {
         if attempts > 10 {
-            warn!(slog_scope::logger(), "Failed to retry_extend {} messages", timeout_info.len());
+            warn!(self.logger, "Failed to retry_extend {} messages", timeout_info.len());
             return;
         }
 
@@ -798,7 +803,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
         let entries: Vec<_> = timeout_info.into_iter().flat_map(|(receipt, timeout, start_time)| {
             let now = Instant::now();
             if start_time + timeout < now + Duration::from_millis(10) {
-                error!(slog_scope::logger(), "Message timeout expired before extend: start_time {:#?} timeout {:#?} now {:#?}", start_time, timeout, now);
+                error!(self.logger, "Message timeout expired before extend: start_time {:#?} timeout {:#?} now {:#?}", start_time, timeout, now);
                 None
             } else {
                 let id = format!("{}", uuid::Uuid::new_v4());
@@ -844,7 +849,7 @@ impl<SQ> VisibilityTimeoutExtender<SQ>
                     backoff += 1;
                     thread::sleep(Duration::from_millis(5 * backoff));
                     if backoff > 5 {
-                        warn!(slog_scope::logger(), "Failed to change message visibility {}", e);
+                        warn!(self.logger, "Failed to change message visibility {}", e);
                         break
                     } else {
                         continue
@@ -1003,32 +1008,11 @@ mod test {
 
     #[test]
     fn test_hundred() {
+        let logger = util::init_logger("test_hundred.log");
+
         util::set_timer();
         let timer = util::get_timer();
 
-        let log_path = "test_everything.log";
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(log_path)
-            .expect(&format!("Failed to create log file {}", log_path));
-
-        // create logger
-        let logger = slog::Logger::root(
-            Mutex::new(slog_json::Json::default(file)).map(slog::Fuse),
-            o!("version" => env!("CARGO_PKG_VERSION"),
-           "place" =>
-              FnValue(move |info| {
-                  format!("{}:{} {}",
-                          info.file(),
-                          info.line(),
-                          info.module())
-              }))
-        );
-
-        // slog_stdlog uses the logger from slog_scope, so set a logger there
-        let _guard = slog_scope::set_global_logger(logger);
 
         thread::sleep(Duration::from_millis(500));
 
@@ -1038,12 +1022,12 @@ mod test {
         let sqs_client = Arc::new(new_sqs_client());
 
 
-        let throttler = MedianThrottler::new();
+        let throttler = MedianThrottler::new(logger.clone());
         let throttler = ThrottlerActor::new(throttler);
 
         let deleter = MessageDeleterBroker::new(
             |_| {
-                MessageDeleter::new(sqs_client.clone(), queue_url.clone())
+                MessageDeleter::new(sqs_client.clone(), queue_url.clone(), logger.clone())
             },
             5,
             None
@@ -1059,7 +1043,11 @@ mod test {
 
         let broker = VisibilityTimeoutExtenderBroker::new(
             |actor| {
-                VisibilityTimeoutExtender::new(sqs_client.clone(), queue_url.clone(), deleter.clone(), throttler.clone())
+                VisibilityTimeoutExtender::new(sqs_client.clone(),
+                                               queue_url.clone(),
+                                               deleter.clone(),
+                                               throttler.clone(),
+                                               logger.clone())
             },
             5,
             None
@@ -1072,29 +1060,46 @@ mod test {
         let flusher = BufferFlushTimer::new(buffer.clone(), Duration::from_millis(200));
         let flusher = BufferFlushTimerActor::new(flusher);
 
-        let consumer_throttler = ConsumerThrottler::new();
+        let consumer_throttler = ConsumerThrottler::new(logger.clone());
         let consumer_throttler = ConsumerThrottlerActor::new(consumer_throttler);
 
-        let state_manager = SqsMessageStateManager::new(buffer, deleter.clone());
+        let state_manager = SqsMessageStateManager::new(buffer,
+                                                        deleter.clone(),
+                                                        logger.clone());
+
         let state_manager = MessageStateManagerActor::new(state_manager);
 
         let processor = MessageHandlerBroker::new(
             |_| {
-                let publisher = MessagePublisher::new(sns_client.clone(), state_manager.clone());
-                DelayMessageProcessor::new(publisher, TopicCreator::new(sns_client.clone()))
+                let publisher = MessagePublisher::new(
+                    sns_client.clone(),
+                    state_manager.clone(),
+                    logger.clone());
+
+                DelayMessageProcessor::new(publisher,
+                                           TopicCreator::new(sns_client.clone()),
+                                           logger.clone())
             },
             1,
             1000,
             state_manager.clone(),
-            sc.clone()
+            sc.clone(),
+            logger.clone()
         );
 
         let mut sqs_broker = ConsumerBroker::new(
             |actor| {
-                DelayMessageConsumer::new(sqs_client.clone(), queue_url.clone(), actor, state_manager.clone(), processor.clone(), throttler.clone())
+                DelayMessageConsumer::new(sqs_client.clone(),
+                                          queue_url.clone(),
+                                          actor,
+                                          state_manager.clone(),
+                                          processor.clone(),
+                                          throttler.clone(),
+                                          logger.clone())
             },
             1,
-            None
+            None,
+            logger.clone()
         );
 
         consumer_throttler.register_consumer(sqs_broker.clone());
@@ -1121,96 +1126,20 @@ mod test {
         assert!(sns_client.publishes.load(Ordering::Relaxed) >= 100);
     }
 
-//    #[test]
-    fn test_throttler() {
-        util::set_timer();
-        let timer = util::get_timer();
-
-        let log_path = "test_everything.log";
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(log_path)
-            .expect(&format!("Failed to create log file {}", log_path));
-
-        // create logger
-        let logger = slog::Logger::root(
-            Mutex::new(slog_json::Json::default(file)).map(slog::Fuse),
-            o!("version" => env!("CARGO_PKG_VERSION"),
-           "place" =>
-              FnValue(move |info| {
-                  format!("{}:{} {}",
-                          info.file(),
-                          info.line(),
-                          info.module())
-              }))
-        );
-
-        // slog_stdlog uses the logger from slog_scope, so set a logger there
-        let _guard = slog_scope::set_global_logger(logger);
-        thread::sleep(Duration::from_millis(500));
-
-        let mut throttler = MedianThrottler::new();
-
-        // Given an increase in processing times we expect our inflight message
-        // limit to decrease
-        for _ in 0..64 {
-            throttler.message_start("receipt".to_owned(), Instant::now());
-            thread::sleep(Duration::from_millis(10));
-            throttler.message_stop("receipt".to_owned(), Instant::now());
-        }
-
-        let old_limit = throttler.get_inflight_limit();
-
-        for _ in 0..64 {
-            throttler.message_start("receipt".to_owned(), Instant::now());
-            thread::sleep(Duration::from_millis(50));
-            throttler.message_stop("receipt".to_owned(), Instant::now());
-        }
-
-        let new_limit = throttler.get_inflight_limit();
-
-        assert!(old_limit > new_limit);
-
-        thread::sleep(Duration::from_millis(150));
-    }
-
     #[test]
     fn test_deleter() {
+        let logger = util::init_logger("test_deleter.log");
+
         util::set_timer();
         let timer = util::get_timer();
 
-        let log_path = "test_everything.log";
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(log_path)
-            .expect(&format!("Failed to create log file {}", log_path));
-
-        // create logger
-        let logger = slog::Logger::root(
-            Mutex::new(slog_json::Json::default(file)).map(slog::Fuse),
-            o!("version" => env!("CARGO_PKG_VERSION"),
-           "place" =>
-              FnValue(move |info| {
-                  format!("{}:{} {}",
-                          info.file(),
-                          info.line(),
-                          info.module())
-              }))
-        );
-
-        // slog_stdlog uses the logger from slog_scope, so set a logger there
-        let _guard = slog_scope::set_global_logger(logger);
 
         let queue_name = "local-dev-cobrien-TEST_QUEUE";
         let queue_url = "some queue url".to_owned();
 
         let sqs_client = Arc::new(new_sqs_client());
 
-        let mut deleter = MessageDeleter::new(sqs_client.clone(), queue_url.clone());
+        let mut deleter = MessageDeleter::new(sqs_client.clone(), queue_url.clone(), logger.clone());
 
         deleter.delete_messages(vec![("receipt1".to_owned(), Instant::now())]);
 
@@ -1218,5 +1147,4 @@ mod test {
 
         assert_eq!(sqs_client.deletes.load(Ordering::Relaxed), 1);
     }
-
 }

@@ -1,5 +1,12 @@
 use rusoto_core::{default_tls_client, Region};
 
+use std::fs::OpenOptions;
+use slog;
+use slog::Logger;
+use slog_json;
+use slog_scope;
+use slog_stdlog;
+use slog::{Drain, FnValue};
 use futures_cpupool::CpuPool;
 use tokio_timer::*;
 use futures::*;
@@ -12,7 +19,7 @@ use rusoto_sqs::{Sqs, SqsClient, CreateQueueRequest};
 use rusoto_credential::{ProvideAwsCredentials, ChainProvider, ProfileProvider};
 use rusoto_sns::SnsClient;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::env;
 use hyper;
 
@@ -186,4 +193,27 @@ pub fn easy_init<F, P>()
           F: Fn(MessageHandlerActor) -> P,
 {
 
+}
+
+pub fn init_logger(log_path: &str) -> Logger {
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(log_path)
+        .expect(&format!("Failed to create log file {}", log_path));
+
+    let logger = slog::Logger::root(
+        Mutex::new(slog_json::Json::default(file)).map(slog::Fuse),
+        o!("version" => env!("CARGO_PKG_VERSION"),
+           "place" =>
+              FnValue(move |info| {
+                  format!("{}:{} {}",
+                          info.file(),
+                          info.line(),
+                          info.module())
+              }))
+    );
+
+    logger
 }

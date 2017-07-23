@@ -4,6 +4,7 @@ use std::thread;
 use rusoto_sqs::{Sqs, ReceiveMessageRequest};
 use dogstatsd::Client;
 use std::sync::Arc;
+use slog::Logger;
 use slog_scope;
 use visibility::*;
 use autoscaling::*;
@@ -33,7 +34,8 @@ pub struct DelayMessageConsumer<C, M, T, SQ>
     vis_manager: M,
     processor: MessageHandlerBroker,
     throttler: T,
-    throttle: Duration
+    throttle: Duration,
+    logger: Logger
 }
 
 impl<C, M, T, SQ> DelayMessageConsumer<C, M, T, SQ>
@@ -48,7 +50,8 @@ impl<C, M, T, SQ> DelayMessageConsumer<C, M, T, SQ>
                actor: C,
                vis_manager: M,
                processor: MessageHandlerBroker,
-               throttler: T)
+               throttler: T,
+               logger: Logger)
                -> DelayMessageConsumer<C, M, T, SQ>
     {
         DelayMessageConsumer {
@@ -58,7 +61,8 @@ impl<C, M, T, SQ> DelayMessageConsumer<C, M, T, SQ>
             vis_manager,
             processor,
             throttler,
-            throttle: Duration::from_millis(500)
+            throttle: Duration::from_millis(500),
+            logger
         }
     }
 }
@@ -85,7 +89,7 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
                 res.messages
             }
             Err(e) => {
-                warn!(slog_scope::logger(), "Failed to receive sqs message. {}", e);
+                warn!(self.logger, "Failed to receive sqs message. {}", e);
                 return;
             }
         };
@@ -98,7 +102,7 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
             messages.dedup_by(|a, b| a.receipt_handle == b.receipt_handle);
 
             if o_len != messages.len() {
-                warn!(slog_scope::logger(), "Contained duplicate messages!");
+                warn!(self.logger, "Contained duplicate messages!");
             }
 
             let messages: Vec<_> = messages.iter().filter_map(|msg| {
@@ -113,7 +117,7 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
                 }
             }).collect();
 
-            trace!(slog_scope::logger(), "Processing {} messages", messages.len());
+            trace!(self.logger, "Processing {} messages", messages.len());
 
             for message in messages {
                 self.processor.process(message.clone());
@@ -295,6 +299,7 @@ pub struct ConsumerBroker
     sender: Sender<ConsumerMessage>,
     p_sender: Sender<ConsumerMessage>,
     new: ConsumerActor,
+    logger: Logger,
     id: String
 }
 
@@ -303,7 +308,8 @@ impl ConsumerBroker
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new<T, C, F>(new: F,
                         worker_count: usize,
-                        max_queue_depth: T)
+                        max_queue_depth: T,
+                        logger: Logger)
                         -> ConsumerBroker
         where C: Consumer + Send + 'static,
               F: Fn(ConsumerActor) -> C,
@@ -328,6 +334,7 @@ impl ConsumerBroker
             p_sender: p_sender.clone(),
             new: ConsumerActor::from_queue(&new, sender.clone(), receiver.clone(),
                                            p_sender.clone(), p_receiver.clone()),
+            logger,
             id
         }
     }
@@ -337,7 +344,7 @@ impl ConsumerBroker
             self.workers.push(self.new.clone());
             self.worker_count += 1;
         }
-        debug!(slog_scope::logger(), "Adding consumer: {}", self.worker_count);
+        debug!(self.logger, "Adding consumer: {}", self.worker_count);
     }
 
     pub fn drop_consumer(&mut self) {
@@ -345,7 +352,7 @@ impl ConsumerBroker
             self.workers.pop();
             self.worker_count -= 1;
         }
-        debug!(slog_scope::logger(), "Dropping consumer: {}", self.worker_count);
+        debug!(self.logger, "Dropping consumer: {}", self.worker_count);
     }
 
     pub fn shut_down(&mut self) {
@@ -373,16 +380,18 @@ impl ConsumerBroker
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ConsumerThrottler {
     consumer_broker: Option<ConsumerBroker>,
+    logger: Logger
 }
 
 impl ConsumerThrottler {
-    pub fn new()
+    pub fn new(logger: Logger)
         -> ConsumerThrottler {
         ConsumerThrottler {
             consumer_broker: None,
+            logger
         }
     }
 
@@ -393,7 +402,7 @@ impl ConsumerThrottler {
                     consumer_broker.throttle(how_long)
                 }
             }
-            None => error!(slog_scope::logger(), "No consumer registered with ConsumerThrottler")
+            None => error!(self.logger, "No consumer registered with ConsumerThrottler")
         }
     }
 
@@ -505,24 +514,28 @@ mod test {
     use mocks::*;
 
     use std::collections::HashMap;
+    use util::init_logger;
 
     #[test]
     pub fn test_consumer() {
+        let logger = init_logger("test_consumer.log");
+
         let mock_consumer = MockConsumer::new();
         let mock_state_manager = MockMessageStateManager::new();
 
         let (processor_sender, processor_receiver) = unbounded();
-
         let sndr = processor_sender.clone();
         let rcvr = processor_receiver.clone();
         let mock_processor_broker = MessageHandlerBroker::new(
             move |_| {
-                MockProcessor::from_queue(sndr.clone(), rcvr.clone())
+                MockProcessor::from_queue(sndr.clone(),
+                                          rcvr.clone())
             },
             1,
             None,
             mock_state_manager.clone(),
-            None
+            None,
+            logger.clone()
         );
 
         let throttler = MockThrottler::new();
@@ -533,7 +546,8 @@ mod test {
             mock_consumer.clone(),
             mock_state_manager.clone(),
             mock_processor_broker.clone(),
-            throttler.clone()
+            throttler.clone(),
+            logger.clone()
         );
 
         consumer.consume();
@@ -560,7 +574,7 @@ mod test {
                         => {
                             *receipt_count.entry(receipt.clone()).or_insert(0) += 1;
                             true
-                        },
+                        }
                         MessageStateManagerMessage::DeregisterVariant { ref receipt, .. }
                         => {
                             *receipt_count.entry(receipt.clone()).or_insert(0) -= 1;
@@ -587,8 +601,8 @@ mod test {
 
         loop {
             match throttler.receiver.try_recv() {
-                Ok(m)   => throttler_msgs.push(m),
-                _   => break
+                Ok(m) => throttler_msgs.push(m),
+                _ => break
             }
         }
 
@@ -602,13 +616,13 @@ mod test {
                         => {
                             *receipt_count.entry(receipt.clone()).or_insert(0) += 1;
                             true
-                        },
+                        }
                         ThrottlerMessage::Stop { ref receipt, .. }
                         => {
                             *receipt_count.entry(receipt.clone()).or_insert(0) -= 1;
                             false
-                        },
-                        _   => panic!("Unexpected message")
+                        }
+                        _ => panic!("Unexpected message")
                     }
                 }
             );

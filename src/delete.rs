@@ -5,7 +5,7 @@ use util::*;
 use std::time::{Instant, Duration};
 use std::collections::HashMap;
 use rusoto_sqs::{Sqs, DeleteMessageBatchRequest, DeleteMessageBatchRequestEntry};
-use slog_scope;
+use slog::Logger;
 use std::sync::Arc;
 use arrayvec::ArrayVec;
 use std::iter::Iterator;
@@ -17,16 +17,18 @@ pub struct MessageDeleter<SQ>
 {
     sqs_client: Arc<SQ>,
     queue_url: String,
+    logger: Logger
 }
 
 impl<SQ> MessageDeleter<SQ>
     where SQ: Sqs + Send + Sync + 'static,
 {
     #[cfg_attr(feature="flame_it", flame)]
-    pub fn new(sqs_client: Arc<SQ>, queue_url: String) -> MessageDeleter<SQ> {
+    pub fn new(sqs_client: Arc<SQ>, queue_url: String, logger: Logger) -> MessageDeleter<SQ> {
         MessageDeleter {
             sqs_client,
             queue_url,
+            logger
         }
     }
 
@@ -51,7 +53,7 @@ impl<SQ> MessageDeleter<SQ>
         }
         }).collect();
 
-        debug!(slog_scope::logger(), "Deleting {} messages", msg_count);
+        debug!(self.logger, "Deleting {} messages", msg_count);
 
         let req = DeleteMessageBatchRequest {
             entries,
@@ -73,13 +75,13 @@ impl<SQ> MessageDeleter<SQ>
                         let dur = now - *init_time;
 
                         let dur = millis(dur);
-                        debug!(slog_scope::logger(), "Took {}ms to process message to deletion", dur)
+                        debug!(self.logger, "Took {}ms to process message to deletion", dur)
                     }
                     break
                 },
                 Err(e)  => {
                     if backoff >= 5 {
-                        warn!(slog_scope::logger(), "Failed to deleted {} messages {}", msg_count , e);
+                        warn!(self.logger, "Failed to deleted {} messages {}", msg_count , e);
                         break
                     }
                     backoff += 1;

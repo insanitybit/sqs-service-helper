@@ -2,7 +2,6 @@ use arraydeque::ArrayDeque;
 use lru_time_cache::LruCache;
 use two_lock_queue::{Sender, Receiver, RecvTimeoutError, unbounded};
 use uuid;
-
 use std::cmp::{min, max, Ordering};
 use std::iter::{self, FromIterator};
 use std::time::{Instant, Duration};
@@ -11,7 +10,7 @@ use std::mem::uninitialized;
 
 use consumer::*;
 use util::*;
-use slog_scope;
+use slog::Logger;
 
 type CurrentActors = usize;
 
@@ -54,10 +53,11 @@ pub struct MedianThrottler {
     previously_seen: LruCache<String, ()>,
     proc_times: StreamingMedian,
     inflight_limit: usize,
+    logger: Logger
 }
 
 impl MedianThrottler {
-    pub fn new() -> MedianThrottler {
+    pub fn new(logger: Logger) -> MedianThrottler {
         let inflight_timings =
             LruCache::with_expiry_duration_and_capacity(Duration::from_secs(12 * 60 * 60),
                                                         120_000);
@@ -73,6 +73,7 @@ impl MedianThrottler {
             previously_seen,
             proc_times,
             inflight_limit: 10,
+            logger
         }
     }
 
@@ -115,7 +116,7 @@ impl MedianThrottler {
 impl Throttler for MedianThrottler {
     fn message_start(&mut self, receipt: String, time_started: Instant) {
         if self.inflight_timings.insert(receipt.clone(), time_started).is_some() {
-            error!(slog_scope::logger(), "Message starting twice");
+            error!(self.logger, "Message starting twice");
         }
 
         self.previously_seen.insert(receipt, ());
@@ -189,7 +190,7 @@ impl Throttler for MedianThrottler {
                 };
 
                 if last_limit != self.inflight_limit {
-                    debug!(slog_scope::logger(),
+                    debug!(self.logger,
                            "Setting new inflight limit to : {} from {}",
                            self.inflight_limit, last_limit);
                 }
@@ -197,19 +198,13 @@ impl Throttler for MedianThrottler {
                 self.inflight_limit = min(self.inflight_limit, 120_000);
             }
             _ => {
-                warn!(slog_scope::logger(),
+                warn!(self.logger,
                       "Attempting to deregister timeout that does not exist:\
                 receipt: {}", receipt);
             }
         };
     }
 
-}
-
-impl Default for MedianThrottler {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl ThrottlerActor

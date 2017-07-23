@@ -9,6 +9,7 @@ use two_lock_queue::{Sender, Receiver, RecvTimeoutError, unbounded, channel};
 use std::time::Duration;
 use rusoto_sns::Sns;
 use slog_scope;
+use slog::Logger;
 use util::TopicCreator;
 use uuid::Uuid;
 use std::thread;
@@ -24,7 +25,8 @@ pub struct DelayMessageProcessor<SN>
     where SN: Sns + Send + Sync + 'static,
 {
     publisher: MessagePublisher<SN>,
-    topic_creator: TopicCreator<SN>
+    topic_creator: TopicCreator<SN>,
+    logger: Logger
 }
 
 impl<SN> DelayMessageProcessor<SN>
@@ -32,12 +34,14 @@ impl<SN> DelayMessageProcessor<SN>
 {
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new(publisher: MessagePublisher<SN>,
-               topic_creator: TopicCreator<SN>)
+               topic_creator: TopicCreator<SN>,
+               logger: Logger)
                -> DelayMessageProcessor<SN>
     {
         DelayMessageProcessor {
             publisher,
             topic_creator,
+            logger
         }
     }
 }
@@ -52,11 +56,12 @@ pub struct MessageHandlerActor {
 impl MessageHandlerActor {
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn from_queue<M, P, F>(new: &F,
-                            sender: Sender<SqsMessage>,
-                            receiver: Receiver<SqsMessage>,
-                            state_manager: M,
-                            short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
-                            -> MessageHandlerActor
+                               sender: Sender<SqsMessage>,
+                               receiver: Receiver<SqsMessage>,
+                               state_manager: M,
+                               short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>,
+                               logger: Logger)
+                               -> MessageHandlerActor
         where M: MessageStateManager + Clone + Send + 'static,
               P: MessageHandler + Send + 'static,
               F: Fn(MessageHandlerActor) -> P
@@ -81,23 +86,26 @@ impl MessageHandlerActor {
                             let receipt = match msg.receipt_handle.clone() {
                                 Some(r) => r,
                                 None => {
-                                    error!(slog_scope::logger(), "Missing receipt handle");
+                                    error!(logger,
+                                           "Missing receipt handle");
                                     continue
                                 }
                             };
+
                             match _actor.process_message(msg) {
                                 Ok(_) => {
                                     state_manager.deregister(receipt.clone(), true);
                                 }
                                 Err(e) => {
                                     error!(
-                                        slog_scope::logger(),
+                                        logger,
                                         "Actor failed to process message: {}",
                                         e
                                     );
                                     state_manager.deregister(receipt.clone(), false);
                                 }
                             }
+
                             if let Some(ref sc) = short_circuit {
                                 let mut short_circuit = sc.lock().unwrap();
                                 short_circuit.insert(receipt.clone(), ());
@@ -117,9 +125,10 @@ impl MessageHandlerActor {
 
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new<M, P, F>(new: F,
-                     state_manager: M,
-                     short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
-                     -> MessageHandlerActor
+                        state_manager: M,
+                        short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>,
+                        logger: Logger)
+                        -> MessageHandlerActor
         where M: MessageStateManager + Clone + Send + 'static,
               P: MessageHandler + Send + 'static,
               F: FnOnce(MessageHandlerActor) -> P
@@ -145,23 +154,25 @@ impl MessageHandlerActor {
                             let receipt = match msg.receipt_handle.clone() {
                                 Some(r) => r,
                                 None => {
-                                    error!(slog_scope::logger(), "Missing receipt handle");
+                                    error!(logger, "Missing receipt handle");
                                     continue
                                 }
                             };
+
                             match _actor.process_message(msg) {
                                 Ok(_) => {
                                     state_manager.deregister(receipt.clone(), true);
                                 }
                                 Err(e) => {
                                     error!(
-                                        slog_scope::logger(),
+                                        logger,
                                         "Actor failed to process message: {}",
                                         e
                                     );
                                     state_manager.deregister(receipt.clone(), false);
                                 }
                             }
+
                             if let Some(ref sc) = short_circuit {
                                 let mut short_circuit = sc.lock().unwrap();
                                 short_circuit.insert(receipt.clone(), ());
@@ -191,11 +202,12 @@ impl MessageHandlerBroker
 {
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new<M, P, T, F>(new: F,
-                        worker_count: usize,
-                        max_queue_depth: T,
-                        state_manager: M,
-                        short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
-                        -> MessageHandlerBroker
+                           worker_count: usize,
+                           max_queue_depth: T,
+                           state_manager: M,
+                           short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>,
+                           logger: Logger)
+                           -> MessageHandlerBroker
         where P: MessageHandler + Send + 'static,
               M: MessageStateManager + Clone + Send + 'static,
               F: Fn(MessageHandlerActor) -> P,
@@ -211,7 +223,8 @@ impl MessageHandlerBroker
                                                 sender.clone(),
                                                 receiver.clone(),
                                                 state_manager.clone(),
-                                                short_circuit.clone())
+                                                short_circuit.clone(),
+                                                logger.clone())
             )
             .collect();
 
@@ -238,7 +251,7 @@ impl<SN> MessageHandler for DelayMessageProcessor<SN>
         let raw_body = match msg.body {
             Some(ref body) => body.to_owned(),
             None => {
-                warn!(slog_scope::logger(), "Message has no body.");
+                warn!(self.logger, "Message has no body.");
 
                 return Err("Message has no body.".to_owned());
             }
@@ -258,7 +271,6 @@ impl<SN> MessageHandler for DelayMessageProcessor<SN>
         let delay_message = match delay_message {
             Ok(m) => m,
             Err(e) => {
-                error!(slog_scope::logger(), "Failed to deserialize delay message: {}", e);
                 return Err(format!("Failed to deserialize delay message: {}", e));
             }
         };

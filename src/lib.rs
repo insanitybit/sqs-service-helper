@@ -101,7 +101,7 @@ pub mod publish;
 pub mod util;
 pub mod visibility;
 
-mod mocks
+mod mocks;
 mod queue;
 
 

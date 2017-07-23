@@ -6,6 +6,7 @@ use std::time::{Duration};
 use rusoto_sns::{Sns, PublishInput};
 use delay::DelayMessage;
 use slog_scope;
+use slog::Logger;
 use std::sync::Arc;
 use std::iter::Iterator;
 use std::thread;
@@ -16,16 +17,20 @@ pub struct MessagePublisher<SN>
 {
     sns_client: Arc<SN>,
     vis_manager: MessageStateManagerActor,
+    logger: Logger
 }
 
 impl<SN> MessagePublisher<SN>
     where SN: Sns + Send + Sync + 'static,
 {
     #[cfg_attr(feature="flame_it", flame)]
-    pub fn new(sns_client: Arc<SN>, vis_manager: MessageStateManagerActor) -> MessagePublisher<SN> {
+    pub fn new(sns_client: Arc<SN>, vis_manager: MessageStateManagerActor, logger: Logger)
+        -> MessagePublisher<SN>
+    {
         MessagePublisher {
             sns_client,
-            vis_manager
+            vis_manager,
+            logger
         }
     }
 
@@ -36,7 +41,7 @@ impl<SN> MessagePublisher<SN>
                 self.vis_manager.deregister(receipt.clone(), true);
             },
             Err(e)  => {
-                warn!(slog_scope::logger(), "Failed to publish message with: {}", e);
+                warn!(self.logger, "Failed to publish message with: {}", e);
                 self.vis_manager.deregister(receipt, false);
             }
         }
