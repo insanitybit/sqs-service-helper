@@ -1,3 +1,9 @@
+use autoscaling::*;
+use visibility::*;
+use consumer::*;
+use delete::*;
+use processor::*;
+
 use rusoto_core::{default_tls_client, Region};
 
 use std::fs::OpenOptions;
@@ -187,11 +193,96 @@ impl<SN> TopicCreator<SN>
 
 use processor::{MessageHandlerActor, MessageHandler};
 
-pub fn easy_init<F, P>()
-    where P: MessageHandler,
+pub fn easy_init<F, P>(new: F, logger: Logger)
+    -> impl Consumer
+    where P: MessageHandler + Send + 'static,
           F: Fn(MessageHandlerActor) -> P,
 {
 
+    set_timer();
+
+    let provider = get_profile_provider();
+
+    let queue_url = "some queue url".to_owned();
+
+    let sqs_client = Arc::new(new_sqs_client(&provider));
+
+    let throttler = MedianThrottler::new(logger.clone());
+    let throttler = ThrottlerActor::new(throttler);
+
+    let deleter = MessageDeleterBroker::new(
+        |_| {
+            MessageDeleter::new(sqs_client.clone(), queue_url.clone(), logger.clone())
+        },
+        5,
+        None
+    );
+
+    let deleter = MessageDeleteBuffer::new(deleter, Duration::from_millis(50));
+    let deleter = MessageDeleteBufferActor::new(deleter);
+
+    let delete_flusher = DeleteBufferFlusher::new(deleter.clone(), Duration::from_secs(1));
+    DeleteBufferFlusherActor::new(delete_flusher.clone());
+
+    let broker = VisibilityTimeoutExtenderBroker::new(
+        |_| {
+            VisibilityTimeoutExtender::new(sqs_client.clone(),
+                                           queue_url.clone(),
+                                           deleter.clone(),
+                                           throttler.clone(),
+                                           logger.clone())
+        },
+        5,
+        None
+    );
+
+    let sc = Some(get_short_circuit());
+    let buffer = VisibilityTimeoutExtenderBuffer::new(broker, 2, sc.clone());
+    let buffer = VisibilityTimeoutExtenderBufferActor::new(buffer);
+
+    let flusher = BufferFlushTimer::new(buffer.clone(), Duration::from_millis(200));
+    let _flusher = BufferFlushTimerActor::new(flusher);
+
+    let consumer_throttler = ConsumerThrottler::new(logger.clone());
+    let consumer_throttler = ConsumerThrottlerActor::new(consumer_throttler);
+
+    let state_manager = SqsMessageStateManager::new(buffer,
+                                                    deleter.clone(),
+                                                    logger.clone());
+
+    let state_manager = MessageStateManagerActor::new(state_manager);
+
+    let processor = MessageHandlerBroker::new(
+        new,
+        1,
+        1000,
+        state_manager.clone(),
+        sc.clone(),
+        logger.clone()
+    );
+
+    let mut sqs_broker = ConsumerBroker::new(
+        |actor| {
+            DelayMessageConsumer::new(sqs_client.clone(),
+                                      queue_url.clone(),
+                                      actor,
+                                      state_manager.clone(),
+                                      processor.clone(),
+                                      throttler.clone(),
+                                      logger.clone())
+        },
+        1,
+        None,
+        logger.clone()
+    );
+
+    consumer_throttler.register_consumer(sqs_broker.clone());
+
+    throttler.register_consumer_throttler(consumer_throttler);
+
+    sqs_broker.consume();
+
+    sqs_broker
 }
 
 pub fn init_logger(log_path: &str) -> Logger {

@@ -485,7 +485,7 @@ mod test {
         }
 
         for i in median_tracker.sorted.windows(2) {
-            assert!(i[0] < i[1]);
+            assert!(i[0] <= i[1]);
         }
     }
 
@@ -499,7 +499,7 @@ mod test {
         }
 
         for i in median_tracker.sorted.windows(2) {
-            assert!(i[0] < i[1]);
+            assert!(i[0] <= i[1]);
         }
     }
 
@@ -513,8 +513,22 @@ mod test {
         }
 
         for i in median_tracker.sorted.windows(2) {
-            assert!(i[0] < i[1]);
+            assert!(i[0] <= i[1]);
         }
+    }
+
+
+    #[quickcheck]
+    fn maintains_sorted(input: u32) -> bool {
+        let mut median_tracker = StreamingMedian::new();
+        median_tracker.insert_and_calculate(input);
+
+        for i in median_tracker.sorted.windows(2) {
+            if i[0] > i[1] {
+                return false
+            }
+        }
+        true
     }
 }
 

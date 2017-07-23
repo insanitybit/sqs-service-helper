@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 //#![deny(warnings)]
-#![feature(conservative_impl_trait, drop_types_in_const, test)]
+#![cfg_attr(test, feature(plugin))]
+#![cfg_attr(test, plugin(quickcheck_macros))]
+
+#![feature(conservative_impl_trait, drop_types_in_const, test, plugin)]
 #![cfg_attr(feature = "flame_it", feature(plugin, custom_attribute))]
 #![cfg_attr(feature = "flame_it", plugin(flamer))]
 
@@ -12,6 +15,9 @@ extern crate flame;
 #[macro_use]
 extern crate slog;
 extern crate slog_term;
+
+#[cfg(test)]
+extern crate quickcheck;
 
 #[macro_use]
 extern crate serde_derive;

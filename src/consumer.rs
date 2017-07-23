@@ -348,28 +348,34 @@ impl ConsumerBroker
         debug!(self.logger, "Dropping consumer: {}", self.worker_count);
     }
 
-    pub fn shut_down(&mut self) {
-        self.workers.clear();
-        self.worker_count = 0;
-    }
-
     pub fn shut_down_blocking(&mut self) {
         self.workers.clear();
         self.worker_count = 0;
     }
+}
 
+impl Consumer for ConsumerBroker {
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn consume(&self) {
+    fn consume(&mut self) {
         self.sender.send(
             ConsumerMessage::Consume
         ).unwrap();
     }
 
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn throttle(&self, how_long: Duration) {
+    fn throttle(&mut self, how_long: Duration) {
         self.sender.send(
             ConsumerMessage::Throttle { how_long }
         ).unwrap();
+    }
+
+    fn shut_down(&mut self) {
+        self.workers.clear();
+        self.worker_count = 0;
+    }
+
+    fn route_msg(&mut self, msg: ConsumerMessage) {
+        self.sender.send(msg).expect("ConsumerBroker send failed");
     }
 }
 
@@ -388,9 +394,9 @@ impl ConsumerThrottler {
         }
     }
 
-    pub fn throttle(&self, how_long: Duration) {
+    pub fn throttle(&mut self, how_long: Duration) {
         match self.consumer_broker {
-            Some(ref consumer_broker) => {
+            Some(ref mut consumer_broker) => {
                 for _ in 0..consumer_broker.worker_count {
                     consumer_broker.throttle(how_long)
                 }

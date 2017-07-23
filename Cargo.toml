@@ -50,5 +50,9 @@ version = "2"
 default = []
 flame_it = ["flame", "flamer"]
 
+[dev-dependencies]
+quickcheck = "0.4.1"
+quickcheck_macros = "0.4.2"
+
 [profile.dev]
 opt-level = 1
