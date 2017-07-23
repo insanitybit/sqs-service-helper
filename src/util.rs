@@ -193,7 +193,7 @@ impl<SN> TopicCreator<SN>
 
 use processor::{MessageHandlerActor, MessageHandler};
 
-pub fn easy_init<F, P>(new: F, logger: Logger)
+pub fn easy_init<F, P>(new: F, processor_count: usize, logger: Logger)
     -> impl Consumer
     where P: MessageHandler + Send + 'static,
           F: Fn(MessageHandlerActor) -> P,
@@ -254,7 +254,7 @@ pub fn easy_init<F, P>(new: F, logger: Logger)
 
     let processor = MessageHandlerBroker::new(
         new,
-        1,
+        processor_count,
         1000,
         state_manager.clone(),
         sc.clone(),
