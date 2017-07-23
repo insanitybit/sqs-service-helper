@@ -12,6 +12,9 @@ use slog_scope;
 use util::TopicCreator;
 use uuid::Uuid;
 use std::thread;
+use std::sync::{Arc, Mutex};
+
+use lru_time_cache::LruCache;
 
 pub trait MessageHandler {
     fn process_message(&mut self, msg: SqsMessage) -> Result<(), String>;
@@ -49,10 +52,11 @@ pub struct MessageHandlerActor {
 impl MessageHandlerActor {
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn from_queue<P, F>(new: &F,
-                             sender: Sender<SqsMessage>,
-                             receiver: Receiver<SqsMessage>,
-                             state_manager: MessageStateManagerActor)
-                             -> MessageHandlerActor
+                            sender: Sender<SqsMessage>,
+                            receiver: Receiver<SqsMessage>,
+                            state_manager: MessageStateManagerActor,
+                            short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
+                            -> MessageHandlerActor
         where P: MessageHandler + Send + 'static,
               F: Fn(MessageHandlerActor) -> P
     {
@@ -92,7 +96,10 @@ impl MessageHandlerActor {
                                     state_manager.deregister(receipt.clone(), false);
                                 }
                             }
-                            continue
+                            if let Some(ref sc) = short_circuit {
+                                let mut short_circuit = sc.lock().unwrap();
+                                short_circuit.insert(receipt.clone(), ());
+                            }
                         }
                         Err(RecvTimeoutError::Disconnected) => {
                             break
@@ -107,8 +114,10 @@ impl MessageHandlerActor {
     }
 
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new<P, F>(new: F, state_manager: MessageStateManagerActor)
-                      -> MessageHandlerActor
+    pub fn new<P, F>(new: F,
+                     state_manager: MessageStateManagerActor,
+                     short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
+                     -> MessageHandlerActor
         where P: MessageHandler + Send + 'static,
               F: FnOnce(MessageHandlerActor) -> P
     {
@@ -127,7 +136,6 @@ impl MessageHandlerActor {
         thread::spawn(
             move || {
                 loop {
-
                     match recvr.recv_timeout(Duration::from_secs(60)) {
                         Ok(msg) => {
                             let receipt = match msg.receipt_handle.clone() {
@@ -150,13 +158,15 @@ impl MessageHandlerActor {
                                     state_manager.deregister(receipt.clone(), false);
                                 }
                             }
+                            if let Some(ref sc) = short_circuit {
+                                let mut short_circuit = sc.lock().unwrap();
+                                short_circuit.insert(receipt.clone(), ());
+                            }
                         }
                         Err(RecvTimeoutError::Disconnected) => {
                             break
                         }
-                        Err(RecvTimeoutError::Timeout) => {
-
-                        }
+                        Err(RecvTimeoutError::Timeout) => {}
                     }
                 }
             });
@@ -177,10 +187,11 @@ impl MessageHandlerBroker
 {
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new<P, T, F>(new: F,
-                         worker_count: usize,
-                         max_queue_depth: T,
-                         state_manager: MessageStateManagerActor)
-                         -> MessageHandlerBroker
+                        worker_count: usize,
+                        max_queue_depth: T,
+                        state_manager: MessageStateManagerActor,
+                        short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
+                        -> MessageHandlerBroker
         where P: MessageHandler + Send + 'static,
               F: Fn(MessageHandlerActor) -> P,
               T: Into<Option<usize>>,
@@ -190,8 +201,13 @@ impl MessageHandlerBroker
         let (sender, receiver) = max_queue_depth.into().map_or(unbounded(), channel);
 
         let workers = (0..worker_count)
-            .map(|_| MessageHandlerActor::from_queue(&new, sender.clone(), receiver.clone(),
-                                                     state_manager.clone()))
+            .map(|_|
+                MessageHandlerActor::from_queue(&new,
+                                                sender.clone(),
+                                                receiver.clone(),
+                                                state_manager.clone(),
+                                                short_circuit.clone())
+            )
             .collect();
 
         MessageHandlerBroker {

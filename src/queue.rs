@@ -143,6 +143,7 @@ impl<T> Receiver<T>
     }
 }
 
+#[cfg(not(test))]
 mod bench {
     use super::*;
     use test::Bencher;

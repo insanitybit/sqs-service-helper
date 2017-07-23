@@ -242,7 +242,7 @@ impl MessageDeleterBroker
 pub struct MessageDeleteBuffer {
     deleter_broker: MessageDeleterBroker,
     buffer: ArrayVec<[(String, Instant); 10]>,
-    flush_period: Duration
+    flush_period: Duration,
 }
 
 impl MessageDeleteBuffer {

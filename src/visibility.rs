@@ -10,8 +10,8 @@ use rusoto_sqs::{Sqs, ChangeMessageVisibilityBatchRequestEntry, ChangeMessageVis
 use slog_scope;
 use two_lock_queue::{unbounded, Sender, Receiver, RecvTimeoutError, channel};
 
-use std::sync::Arc;
-use std::iter::Iterator;
+use std::sync::{Arc, Mutex};
+use std::iter::{Iterator, FromIterator};
 use std::thread;
 use std::time::{Instant, Duration};
 use std::collections::HashMap;
@@ -340,7 +340,8 @@ pub struct VisibilityTimeoutExtenderBuffer
     // Replace this with a Broker to do proper work stealing
     buffer: ArrayVec<[(String, Duration, Instant, bool); 10]>,
     last_flush: Instant,
-    flush_period: Duration
+    flush_period: Duration,
+    short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>
 }
 
 impl VisibilityTimeoutExtenderBuffer
@@ -349,22 +350,49 @@ impl VisibilityTimeoutExtenderBuffer
     // u8::MAX is just over 4 minutes
     // Highly suggest keep the number closer to 10s of seconds at most.
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new(extender_broker: VisibilityTimeoutExtenderBroker, flush_period: u8) -> VisibilityTimeoutExtenderBuffer
+    pub fn new(extender_broker: VisibilityTimeoutExtenderBroker,
+               flush_period: u8,
+               short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
+        -> VisibilityTimeoutExtenderBuffer
 
     {
         VisibilityTimeoutExtenderBuffer {
             extender_broker,
             buffer: ArrayVec::new(),
             last_flush: Instant::now(),
-            flush_period: Duration::from_secs(flush_period as u64)
+            flush_period: Duration::from_secs(flush_period as u64),
+            short_circuit
         }
     }
 
-
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn extend(&mut self, receipt: String, timeout: Duration, start_time: Instant, should_delete: bool) {
+
         if self.buffer.is_full() {
-            self.flush();
+            if let Some(ref sc) = self.short_circuit {
+                let mut short_circuit = sc.lock().unwrap();
+                let now = Instant::now();
+
+                let shorted_buffer: Vec<_> = self.buffer.iter()
+                    .cloned()
+                    .filter_map(|(receipt, d, instant, should_delete)| {
+                    if !should_delete && now - instant < Duration::from_secs(26) {
+                        if short_circuit.get(&receipt).is_some() {
+                            None
+                        } else {
+                            Some((receipt, d, instant, should_delete))
+                        }
+                    } else {
+                        Some((receipt, d, instant, should_delete))
+                    }
+                }).collect();
+
+                self.buffer = ArrayVec::from_iter(shorted_buffer.into_iter());
+            }
+
+            if self.buffer.is_full() {
+                self.flush();
+            }
         }
 
         self.buffer.push((receipt, timeout, start_time, should_delete));
@@ -382,6 +410,17 @@ impl VisibilityTimeoutExtenderBuffer
             self.flush();
         }
     }
+}
+
+pub fn get_short_circuit() -> Arc<Mutex<LruCache<String, ()>>> {
+    Arc::new(
+        Mutex::new(
+            LruCache::with_expiry_duration_and_capacity(
+                Duration::from_secs(12 * 60 * 60),
+                120_000
+            )
+        )
+    )
 }
 
 pub enum VisibilityTimeoutExtenderBufferMessage {
@@ -1408,7 +1447,8 @@ mod test {
             None
         );
 
-        let buffer = VisibilityTimeoutExtenderBuffer::new(broker, 2);
+        let sc = Some(get_short_circuit());
+        let buffer = VisibilityTimeoutExtenderBuffer::new(broker, 2, sc.clone());
         let buffer = VisibilityTimeoutExtenderBufferActor::new(buffer);
 
         let flusher = BufferFlushTimer::new(buffer.clone(), Duration::from_millis(200));
@@ -1427,7 +1467,8 @@ mod test {
             },
             1,
             1000,
-            state_manager.clone()
+            state_manager.clone(),
+            sc.clone()
         );
 
         let mut sqs_broker = ConsumerBroker::new(
