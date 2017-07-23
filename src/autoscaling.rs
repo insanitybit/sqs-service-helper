@@ -40,7 +40,7 @@ pub struct ThrottlerActor
     id: String
 }
 
-/// MedianThrottler tracks the processing time for messages from the consumer to the
+/// `MedianThrottler` tracks the processing time for messages from the consumer to the
 /// deleter. It then uses this information to calculate how many messages we can
 /// process in 30 seconds, the time it takes for a message to time out. Ideally
 /// we process as many messages as we can while ensuring that we don't back our

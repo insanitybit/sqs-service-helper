@@ -202,7 +202,7 @@ pub fn init_logger(log_path: &str) -> Logger {
         .open(log_path)
         .expect(&format!("Failed to create log file {}", log_path));
 
-    let logger = slog::Logger::root(
+    slog::Logger::root(
         Mutex::new(slog_json::Json::default(file)).map(slog::Fuse),
         o!("version" => env!("CARGO_PKG_VERSION"),
            "place" =>
@@ -212,7 +212,5 @@ pub fn init_logger(log_path: &str) -> Logger {
                           info.line(),
                           info.module())
               }))
-    );
-
-    logger
+    )
 }
