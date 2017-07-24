@@ -1,6 +1,6 @@
 [package]
 name = "sqs-service-helper"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["insanitybit <insanitybit@gmail.com>"]
 
 description = "A library to facilitate SQS based consumer services"

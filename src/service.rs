@@ -52,7 +52,7 @@ impl<F, P> SqsServiceBuilder<F, P>
         self
     }
 
-    pub fn with_with_url(&mut self, queue_url: String) -> &mut Self {
+    pub fn with_queue_url(&mut self, queue_url: String) -> &mut Self {
         self.queue_url = Some(queue_url);
         self
     }
@@ -115,7 +115,7 @@ impl<F, P> SqsServiceBuilder<F, P>
             .expect("queue_url");
 
         let consumer_count = self.consumer_count
-            .expect("consumer_count");
+            .unwrap_or(1);
 
         let deleter_count = self.deleter_count
             .expect("deleter_count");

@@ -958,9 +958,9 @@ mod test {
     use processor::*;
     use consumer::*;
     use util;
-    use util::TopicCreator;
 
-    #[test]
+    // Test is disabled while mocking is built out
+//    #[test]
     fn test_hundred() {
         let logger = util::init_logger("test_hundred.log");
 
