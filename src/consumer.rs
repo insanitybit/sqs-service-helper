@@ -103,7 +103,7 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
             if o_len == 0 {
                 trace!(self.logger, "Empty receive");
                 thread::sleep(Duration::from_millis(100));
-                return
+                return;
             }
 
             messages.sort_by(|a, b| a.receipt_handle.cmp(&b.receipt_handle));
@@ -179,7 +179,8 @@ pub struct ConsumerActor
 impl ConsumerActor
 {
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new<C, F>(new: F)
+    pub fn new<C, F>(new: F,
+                     logger: Logger)
                      -> ConsumerActor
         where C: Consumer + Send + 'static,
               F: Fn(ConsumerActor) -> C,
@@ -196,17 +197,16 @@ impl ConsumerActor
 
         let mut _actor = new(actor.clone());
 
-        let recvr = receiver.clone();
-        let p_recvr = p_receiver.clone();
         thread::spawn(
             move || {
                 loop {
-                    if let Ok(msg) = p_recvr.try_recv() {
+                    trace!(logger, "Consumer queue depth {} {}", p_receiver.len(), receiver.len());
+                    if let Ok(msg) = p_receiver.try_recv() {
                         _actor.route_msg(msg);
                         continue
                     }
 
-                    match recvr.recv_timeout(Duration::from_secs(30)) {
+                    match receiver.recv_timeout(Duration::from_secs(30)) {
                         Ok(msg) => {
                             _actor.route_msg(msg);
                             continue
@@ -229,7 +229,8 @@ impl ConsumerActor
                             sender: Sender<ConsumerMessage>,
                             receiver: Receiver<ConsumerMessage>,
                             p_sender: Sender<ConsumerMessage>,
-                            p_receiver: Receiver<ConsumerMessage>)
+                            p_receiver: Receiver<ConsumerMessage>,
+                            logger: Logger)
                             -> ConsumerActor
         where C: Consumer + Send + 'static,
               F: Fn(ConsumerActor) -> C,
@@ -244,17 +245,16 @@ impl ConsumerActor
 
         let mut _actor = new(actor.clone());
 
-        let recvr = receiver.clone();
-        let p_recvr = p_receiver.clone();
         thread::spawn(
             move || {
                 loop {
-                    if let Ok(msg) = p_recvr.try_recv() {
+                    trace!(logger, "Consumer queue depth {} {}", p_receiver.len(), receiver.len());
+                    if let Ok(msg) = p_receiver.try_recv() {
                         _actor.route_msg(msg);
                         continue
                     }
 
-                    match recvr.recv_timeout(Duration::from_secs(30)) {
+                    match receiver.recv_timeout(Duration::from_secs(30)) {
                         Ok(msg) => {
                             _actor.route_msg(msg);
                             continue
@@ -325,8 +325,14 @@ impl ConsumerBroker
         let (p_sender, p_receiver) = unbounded();
 
         let workers: Vec<_> = (0..worker_count)
-            .map(|_| ConsumerActor::from_queue(&new, sender.clone(), receiver.clone(),
-                                               p_sender.clone(), p_receiver.clone()))
+            .map(|_| ConsumerActor::from_queue(
+                &new,
+                sender.clone(),
+                receiver.clone(),
+                p_sender.clone(),
+                p_receiver.clone(),
+            logger.clone())
+            )
             .collect();
 
         let worker_count = workers.len();
@@ -337,7 +343,8 @@ impl ConsumerBroker
             sender: sender.clone(),
             p_sender: p_sender.clone(),
             new: ConsumerActor::from_queue(&new, sender.clone(), receiver.clone(),
-                                           p_sender.clone(), p_receiver.clone()),
+                                           p_sender.clone(), p_receiver.clone(),
+            logger.clone()),
             logger,
             id
         }

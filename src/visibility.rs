@@ -2,7 +2,7 @@
 
 use delete::*;
 use autoscaling::*;
-
+use util::millis;
 use arrayvec::ArrayVec;
 use uuid;
 use lru_time_cache::LruCache;
@@ -138,8 +138,8 @@ impl MessageStateManagerActor {
             });
 
         MessageStateManagerActor {
-            sender: sender,
-            id: id,
+            sender,
+            id,
         }
     }
 }
@@ -223,7 +223,6 @@ impl VisibilityTimeoutActor {
                 let actor = actor.clone();
                 let receipt = actor.receipt.clone();
                 let res = receiver.recv_timeout(dur / 2);
-
                 match res {
                     Ok(msg) => {
                         match msg {
@@ -303,7 +302,8 @@ impl VisibilityTimeoutExtenderBroker
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new<T, SQ, F>(new: F,
                          worker_count: usize,
-                         max_queue_depth: T)
+                         max_queue_depth: T,
+                         logger: Logger)
                          -> VisibilityTimeoutExtenderBroker
         where SQ: Sqs + Send + Sync + 'static,
               F: Fn(VisibilityTimeoutExtenderActor) -> VisibilityTimeoutExtender<SQ>,
@@ -314,7 +314,10 @@ impl VisibilityTimeoutExtenderBroker
         let (sender, receiver) = max_queue_depth.into().map_or(unbounded(), channel);
 
         let workers = (0..worker_count)
-            .map(|_| VisibilityTimeoutExtenderActor::from_queue(&new, sender.clone(), receiver.clone()))
+            .map(|_| VisibilityTimeoutExtenderActor::from_queue(&new,
+                                                                sender.clone(),
+                                                                receiver.clone(),
+                                                                logger.clone()))
             .collect();
 
         VisibilityTimeoutExtenderBroker {
@@ -404,8 +407,10 @@ impl VisibilityTimeoutExtenderBuffer
 
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn flush(&mut self) {
-        self.extender_broker.extend(Vec::from(self.buffer.as_ref()));
-        self.buffer.clear();
+        if self.buffer.len() != 0 {
+            self.extender_broker.extend(Vec::from(self.buffer.as_ref()));
+            self.buffer.clear();
+        }
     }
 
     #[cfg_attr(feature = "flame_it", flame)]
@@ -431,7 +436,6 @@ pub fn get_short_circuit() -> Arc<Mutex<LruCache<String, ()>>> {
 pub enum VisibilityTimeoutExtenderBufferMessage {
     Extend { receipt: String, timeout: Duration, start_time: Instant, should_delete: bool },
     Flush {},
-    OnTimeout {},
 }
 
 #[derive(Clone)]
@@ -442,95 +446,69 @@ pub struct VisibilityTimeoutExtenderBufferActor {
 
 impl VisibilityTimeoutExtenderBufferActor {
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new(actor: VisibilityTimeoutExtenderBuffer)
+    pub fn new(actor: VisibilityTimeoutExtenderBuffer, logger: Logger)
                -> VisibilityTimeoutExtenderBufferActor
     {
-        let (vis_sender, vis_receiver) = unbounded();
         let id = uuid::Uuid::new_v4().to_string();
-        let vis_recvr = vis_receiver;
 
-        for _ in 0..1 {
-            let recvr = vis_recvr.clone();
-            let mut actor = actor.clone();
-            thread::spawn(
-                move || {
-                    loop {
-                        match recvr.recv_timeout(actor.flush_period) {
-                            Ok(msg) => {
-                                actor.route_msg(msg);
-                                continue
-                            }
-                            Err(RecvTimeoutError::Disconnected) => {
-                                break
-                            }
-                            Err(RecvTimeoutError::Timeout) => {
-                                actor.route_msg(VisibilityTimeoutExtenderBufferMessage::Flush {});
-                                continue
-                            }
-                        }
-                    }
-                });
-        }
-
-        let (del_sender, del_receiver) = unbounded();
-        let del_recvr = del_receiver;
-
-        for _ in 0..1 {
-            let recvr = del_recvr.clone();
-            let mut actor = actor.clone();
-            thread::spawn(
-                move || {
-                    loop {
-                        match recvr.recv_timeout(actor.flush_period) {
-                            Ok(msg) => {
-                                actor.route_msg(msg);
-                                continue
-                            }
-                            Err(RecvTimeoutError::Disconnected) => {
-                                break
-                            }
-                            Err(RecvTimeoutError::Timeout) => {
-                                actor.route_msg(VisibilityTimeoutExtenderBufferMessage::Flush {});
-                                continue
-                            }
-                        }
-                    }
-                });
-        }
-
-
-        let (sender2, receiver2): (Sender<VisibilityTimeoutExtenderBufferMessage>, _) = unbounded();
+        let (sender2, receiver2) = unbounded();
         let recvr2 = receiver2.clone();
         let mut actor = actor.clone();
+
+
         thread::spawn(
-            move || {
-                loop {
-                    match recvr2.recv_timeout(actor.flush_period) {
+        move || {
+            // Avoid sending a flush message if we haven't received any other message type
+            let mut flushable = false;
+
+            let mut first_of_buffer = Instant::now();
+            let period = millis(actor.flush_period) / 10;
+            loop {
+                let logger = logger.clone();
+                if recvr2.len() > 1000 {
+                    warn!(logger, "VisibiltyTimeoutExtenderBufferActor broker queue depth {}", recvr2.len());
+                }
+                match recvr2.recv_timeout(Duration::from_millis(period)) {
                         Ok(msg) => {
+
                             match msg {
-                                VisibilityTimeoutExtenderBufferMessage::Extend {
-                                    should_delete, ..
-                                } => {
-                                    if should_delete {
-                                        del_sender.send(msg).expect("Deleter died.");
-                                    } else {
-                                        vis_sender.send(msg).expect("Deleter died.");
+                                    VisibilityTimeoutExtenderBufferMessage::Flush {} => {
+                                        if flushable {
+                                            actor.route_msg(msg)
+                                        }
+                                        flushable = false;
+                                    },
+                                    VisibilityTimeoutExtenderBufferMessage::Extend {..} => {
+                                        actor.route_msg(msg);
+                                        if !flushable {
+                                            first_of_buffer = Instant::now();
+                                            flushable = true;
+                                        } else {
+                                            let now = Instant::now();
+
+                                            if now - first_of_buffer >= actor.flush_period {
+                                                actor.route_msg(VisibilityTimeoutExtenderBufferMessage::Flush {});
+                                                flushable = false;
+                                            }
+                                        }
                                     }
-                                }
-                                msg => actor.route_msg(msg)
                             }
+
                         }
                         Err(RecvTimeoutError::Disconnected) => {
                             break
                         }
                         Err(RecvTimeoutError::Timeout) => {
-                            actor.route_msg(VisibilityTimeoutExtenderBufferMessage::Flush {});
+                            let now = Instant::now();
+
+                            if now - first_of_buffer >= actor.flush_period {
+                                actor.route_msg(VisibilityTimeoutExtenderBufferMessage::Flush {});
+                            }
                             continue
                         }
-                    }
                 }
-            });
-
+            }
+        });
 
         VisibilityTimeoutExtenderBufferActor {
             sender: sender2,
@@ -554,12 +532,6 @@ impl VisibilityTimeoutExtenderBufferActor {
         let msg = VisibilityTimeoutExtenderBufferMessage::Flush {};
         self.sender.send(msg).expect("VisibilityTimeoutExtenderBufferActor.flush All receivers have died.");
     }
-
-    #[cfg_attr(feature = "flame_it", flame)]
-    pub fn on_timeout(&self) {
-        let msg = VisibilityTimeoutExtenderBufferMessage::OnTimeout {};
-        self.sender.send(msg).expect("VisibilityTimeoutExtenderBufferActor.on_timeout All receivers have died.");
-    }
 }
 
 impl VisibilityTimeoutExtenderBuffer
@@ -575,93 +547,10 @@ impl VisibilityTimeoutExtenderBuffer
             } => {
                 self.extend(receipt, timeout, start_time, should_delete)
             }
-            VisibilityTimeoutExtenderBufferMessage::Flush {} => self.flush(),
-            VisibilityTimeoutExtenderBufferMessage::OnTimeout {} => self.on_timeout(),
+            VisibilityTimeoutExtenderBufferMessage::Flush {} => {
+                self.flush()
+            },
         };
-    }
-}
-
-// BufferFlushTimer
-#[derive(Clone)]
-pub struct BufferFlushTimer
-{
-    pub buffer: VisibilityTimeoutExtenderBufferActor,
-    pub period: Duration
-}
-
-impl BufferFlushTimer
-{
-    #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new(buffer: VisibilityTimeoutExtenderBufferActor, period: Duration) -> BufferFlushTimer {
-        BufferFlushTimer {
-            buffer,
-            period
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum BufferFlushTimerMessage {
-    StartVariant,
-    End,
-}
-
-#[derive(Clone)]
-pub struct BufferFlushTimerActor {
-    sender: MpscSender<BufferFlushTimerMessage>,
-    id: String,
-}
-
-impl BufferFlushTimerActor {
-    #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new(actor: BufferFlushTimer) -> BufferFlushTimerActor
-    {
-        let (sender, receiver) = mpsc_channel();
-        let id = uuid::Uuid::new_v4().to_string();
-
-        thread::spawn(move || {
-            loop {
-                let actor = actor.clone();
-                let dur = actor.period; // Default, minimal timeout
-
-                let res = receiver.recv_timeout(dur);
-
-                match res {
-                    Ok(msg) => {
-                        match msg {
-                            BufferFlushTimerMessage::StartVariant => {}
-                            BufferFlushTimerMessage::End => {
-                                actor.buffer.flush();
-                                break
-                            }
-                        }
-                    }
-                    Err(RecvTimeoutError::Timeout) => {
-                        actor.buffer.on_timeout();
-                    }
-                    Err(RecvTimeoutError::Disconnected) => {
-                        actor.buffer.flush();
-                    }
-                }
-            }
-        });
-
-        BufferFlushTimerActor {
-            sender,
-            id,
-        }
-    }
-
-    #[cfg_attr(feature = "flame_it", flame)]
-    pub fn start(&self) {
-        let msg = BufferFlushTimerMessage::StartVariant;
-        self.sender.send(msg).expect("BufferFlushTimerActor.start: All receivers have died.");
-    }
-
-    #[cfg_attr(feature = "flame_it", flame)]
-    pub fn end(&self) {
-        let msg = BufferFlushTimerMessage::End;
-        self.sender.send(msg).expect("BufferFlushTimerActor.end: All receivers have died.");
     }
 }
 
@@ -866,7 +755,8 @@ impl VisibilityTimeoutExtenderActor {
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn from_queue<SQ, F>(new: &F,
                              sender: Sender<VisibilityTimeoutExtenderMessage>,
-                             receiver: Receiver<VisibilityTimeoutExtenderMessage>)
+                             receiver: Receiver<VisibilityTimeoutExtenderMessage>,
+                             logger: Logger)
                              -> VisibilityTimeoutExtenderActor
         where SQ: Sqs + Send + Sync + 'static,
               F: Fn(VisibilityTimeoutExtenderActor) -> VisibilityTimeoutExtender<SQ>,
@@ -883,6 +773,9 @@ impl VisibilityTimeoutExtenderActor {
         thread::spawn(
             move || {
                 loop {
+                    if receiver.len() > 1000 {
+                        warn!(logger, "VisibilityTimeoutExtenderActor queue depth {}", receiver.len());
+                    }
                     match receiver.recv_timeout(Duration::from_secs(60)) {
                         Ok(msg) => {
                             _actor.route_msg(msg);
@@ -960,7 +853,7 @@ mod test {
     use util;
 
     // Test is disabled while mocking is built out
-//    #[test]
+    //    #[test]
     fn test_hundred() {
         let logger = util::init_logger("test_hundred.log");
 
@@ -1006,9 +899,6 @@ mod test {
                                                           Duration::from_secs(2),
                                                           sc.clone());
         let buffer = VisibilityTimeoutExtenderBufferActor::new(buffer);
-
-        let flusher = BufferFlushTimer::new(buffer.clone(), Duration::from_millis(200));
-        let _flusher = BufferFlushTimerActor::new(flusher);
 
         let consumer_throttler = ConsumerThrottler::new(logger.clone());
         let consumer_throttler = ConsumerThrottlerActor::new(consumer_throttler);
@@ -1096,6 +986,7 @@ mod test {
 #[cfg(not(test))]
 mod bench {
     #![allow(unused_imports)]
+
     use super::*;
     use test::Bencher;
     use xorshift::{Xoroshiro128, Rng, SeedableRng};
@@ -1109,5 +1000,4 @@ mod bench {
             median_tracker.insert_and_calculate(100);
         });
     }
-
 }

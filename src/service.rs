@@ -180,14 +180,14 @@ impl<F, P> SqsServiceBuilder<F, P>
                 MessageDeleter::new(sqs_client.clone(), queue_url.clone(), logger.clone())
             },
             deleter_count,
-            None
+            None,
+            logger.clone()
         );
 
-        let deleter = MessageDeleteBuffer::new(deleter, deleter_buffer_flush_period);
+        let deleter = MessageDeleteBuffer::new(deleter,
+                                               deleter_buffer_flush_period,
+                                               logger.clone());
         let deleter = MessageDeleteBufferActor::new(deleter);
-
-        let delete_flusher = DeleteBufferFlusher::new(deleter.clone(), deleter_buffer_flush_period);
-        let _delete_flusher = DeleteBufferFlusherActor::new(delete_flusher.clone());
 
         let broker = VisibilityTimeoutExtenderBroker::new(
             |_| {
@@ -198,7 +198,8 @@ impl<F, P> SqsServiceBuilder<F, P>
                                                logger.clone())
             },
             visibility_extender_count,
-            None
+            None,
+            logger.clone()
         );
 
         let sc = if short_circuit {
@@ -211,10 +212,8 @@ impl<F, P> SqsServiceBuilder<F, P>
                                                           visibility_buffer_flush_period,
                                                           sc.clone());
 
-        let buffer = VisibilityTimeoutExtenderBufferActor::new(buffer);
-
-        let flusher = BufferFlushTimer::new(buffer.clone(), visibility_buffer_flush_period);
-        let _flusher = BufferFlushTimerActor::new(flusher);
+        let buffer = VisibilityTimeoutExtenderBufferActor::new(buffer,
+                                                               logger.clone());
 
         let consumer_throttler = ConsumerThrottler::new(logger.clone());
         let consumer_throttler = ConsumerThrottlerActor::new(consumer_throttler);
