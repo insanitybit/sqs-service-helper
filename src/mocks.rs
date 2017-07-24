@@ -21,7 +21,6 @@ use slog_json;
 use slog::{Drain, FnValue};
 use base64::encode;
 use serde_json;
-use delay::DelayMessage;
 #[cfg(feature = "flame_it")]
 use flame;
 use std::fs::File;
@@ -216,17 +215,11 @@ impl Sqs for MockSqs {
 
         let mut messages = vec![];
         for _ in 0..10 {
-            let delay_message = serde_json::to_string(
-                &DelayMessage {
-                    message: Uuid::new_v4().to_string(),
-                    topic_name: "topic".to_owned(),
-                    correlation_id: Some("foo".to_owned()),
-                }).unwrap();
 
             messages.push(
                 rusoto_sqs::Message {
                     attributes: None,
-                    body: Some(encode(&delay_message)),
+                    body: Some(encode("delaymsg")),
                     md5_of_body: Some("md5body".to_owned()),
                     md5_of_message_attributes: Some("md5attrs".to_owned()),
                     message_attributes: None,

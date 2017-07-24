@@ -213,7 +213,7 @@ impl<F, P> SqsServiceBuilder<F, P>
             logger.clone()
         );
 
-        let mut sqs_broker = ConsumerBroker::new(
+        let sqs_broker = ConsumerBroker::new(
             |actor| {
                 DelayMessageConsumer::new(sqs_client.clone(),
                                           queue_url.clone(),

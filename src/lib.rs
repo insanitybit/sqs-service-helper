@@ -19,9 +19,6 @@ extern crate slog_term;
 #[cfg(test)]
 extern crate quickcheck;
 
-#[macro_use]
-extern crate serde_derive;
-
 extern crate base64;
 extern crate xorshift;
 extern crate dogstatsd;
@@ -70,11 +67,9 @@ macro_rules! timeout_ms {
 pub mod actor;
 pub mod autoscaling;
 pub mod consumer;
-pub mod delay;
 pub mod delete;
 pub mod metrics;
 pub mod processor;
-pub mod publish;
 pub mod util;
 pub mod visibility;
 pub mod service;

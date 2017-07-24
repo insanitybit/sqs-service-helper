@@ -957,7 +957,6 @@ mod test {
     use std::sync::atomic::Ordering;
     use processor::*;
     use consumer::*;
-    use publish::*;
     use util;
     use util::TopicCreator;
 
@@ -1020,21 +1019,18 @@ mod test {
 
         let state_manager = MessageStateManagerActor::new(state_manager);
 
+        let (processor_sender, processor_receiver) = unbounded();
+        let sndr = processor_sender.clone();
+        let rcvr = processor_receiver.clone();
         let processor = MessageHandlerBroker::new(
-            |_| {
-                let publisher = MessagePublisher::new(
-                    sns_client.clone(),
-                    state_manager.clone(),
-                    logger.clone());
-
-                DelayMessageProcessor::new(publisher,
-                                           TopicCreator::new(sns_client.clone()),
-                                           logger.clone())
+            move |_| {
+                MockProcessor::from_queue(sndr.clone(),
+                                          rcvr.clone())
             },
             1,
-            1000,
+            None,
             state_manager.clone(),
-            sc.clone(),
+            None,
             logger.clone()
         );
 
