@@ -1,6 +1,6 @@
 [root]
 name = "sqs-service-helper"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "arraydeque 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "arrayvec 0.3.23 (registry+https://github.com/rust-lang/crates.io-index)",
