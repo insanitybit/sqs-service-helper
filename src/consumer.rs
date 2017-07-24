@@ -32,7 +32,7 @@ pub struct DelayMessageConsumer<C, M, T, SQ>
     actor: C,
     vis_manager: M,
     processor: MessageHandlerBroker,
-    throttler: T,
+    throttler: Option<T>,
     throttle: Duration,
     logger: Logger
 }
@@ -44,14 +44,15 @@ impl<C, M, T, SQ> DelayMessageConsumer<C, M, T, SQ>
           SQ: Sqs + Send + Sync + 'static,
 {
     #[cfg_attr(feature = "flame_it", flame)]
-    pub fn new(sqs_client: Arc<SQ>,
-               queue_url: String,
-               actor: C,
-               vis_manager: M,
-               processor: MessageHandlerBroker,
-               throttler: T,
-               logger: Logger)
-               -> DelayMessageConsumer<C, M, T, SQ>
+    pub fn new<OT>(sqs_client: Arc<SQ>,
+                   queue_url: String,
+                   actor: C,
+                   vis_manager: M,
+                   processor: MessageHandlerBroker,
+                   throttler: OT,
+                   logger: Logger)
+                   -> DelayMessageConsumer<C, M, T, SQ>
+        where OT: Into<Option<T>>,
     {
         DelayMessageConsumer {
             sqs_client,
@@ -59,7 +60,7 @@ impl<C, M, T, SQ> DelayMessageConsumer<C, M, T, SQ>
             actor,
             vis_manager,
             processor,
-            throttler,
+            throttler: throttler.into(),
             throttle: Duration::from_millis(500),
             logger
         }
@@ -109,7 +110,7 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
                     Some(ref receipt) if msg.body.is_some() => {
                         let now = Instant::now();
                         self.vis_manager.register(receipt.to_owned(), Duration::from_secs(30), now);
-                        self.throttler.message_start(receipt.to_owned(), now);
+                        self.throttler.as_mut().map(|t| t.message_start(receipt.to_owned(), now));
                         Some(msg)
                     }
                     _ => None
@@ -387,7 +388,7 @@ pub struct ConsumerThrottler {
 
 impl ConsumerThrottler {
     pub fn new(logger: Logger)
-        -> ConsumerThrottler {
+               -> ConsumerThrottler {
         ConsumerThrottler {
             consumer_broker: None,
             logger

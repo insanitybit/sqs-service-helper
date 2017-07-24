@@ -356,7 +356,7 @@ impl VisibilityTimeoutExtenderBuffer
     // Highly suggest keep the number closer to 10s of seconds at most.
     #[cfg_attr(feature = "flame_it", flame)]
     pub fn new(extender_broker: VisibilityTimeoutExtenderBroker,
-               flush_period: u8,
+               flush_period: Duration,
                short_circuit: Option<Arc<Mutex<LruCache<String, ()>>>>)
                -> VisibilityTimeoutExtenderBuffer
 
@@ -365,7 +365,7 @@ impl VisibilityTimeoutExtenderBuffer
             extender_broker,
             buffer: ArrayVec::new(),
             last_flush: Instant::now(),
-            flush_period: Duration::from_secs(flush_period as u64),
+            flush_period,
             short_circuit
         }
     }
@@ -1003,7 +1003,9 @@ mod test {
         );
 
         let sc = Some(get_short_circuit());
-        let buffer = VisibilityTimeoutExtenderBuffer::new(broker, 2, sc.clone());
+        let buffer = VisibilityTimeoutExtenderBuffer::new(broker,
+                                                          Duration::from_secs(2),
+                                                          sc.clone());
         let buffer = VisibilityTimeoutExtenderBufferActor::new(buffer);
 
         let flusher = BufferFlushTimer::new(buffer.clone(), Duration::from_millis(200));

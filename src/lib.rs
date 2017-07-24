@@ -27,6 +27,7 @@ extern crate xorshift;
 extern crate dogstatsd;
 extern crate arrayvec;
 extern crate arraydeque;
+extern crate num_cpus;
 extern crate rusoto_sqs;
 extern crate rusoto_sns;
 extern crate rusoto_core;
@@ -76,6 +77,7 @@ pub mod processor;
 pub mod publish;
 pub mod util;
 pub mod visibility;
+pub mod service;
 
 mod mocks;
 

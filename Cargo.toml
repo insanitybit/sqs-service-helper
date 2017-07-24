@@ -10,37 +10,37 @@ repository = "https://github.com/insanitybit/sqs-service-helper"
 readme = "README.md"
 
 [dependencies]
-rand = "0.3.*"
 arraydeque = {version = "0.2.*", features=["use_union"]}
+arrayvec = "0.3.*"
+base64 = "~0.6.*"
 dogstatsd = "0.3.*"
+futures = "0.1.*"
+futures-cpupool = "0.1.*"
+hyper = "0.10.*"
+lru_time_cache = "0.6.*"
+num_cpus = "1.6.2"
+parking_lot = {version = "0.4", features = ["nightly"]}
+rand = "0.3.*"
 rusoto_core = {version = "0.25.0"}
 rusoto_sqs = {version = "0.25.0"}
 rusoto_sns = {version = "0.25.0"}
 rusoto_credential = {version = "0.7.0"}
-hyper = "0.10.*"
-futures = "0.1.*"
-tokio-core = "0.1.*"
-tokio-timer = "0.1"
-futures-cpupool = "0.1.*"
-threadpool = "1.0"
-two-lock-queue = "0.1.*"
 serde_json = "1.*"
 serde_derive = "1.*"
 serde = "1.*"
-lru_time_cache = "0.6.*"
-
 slog-term = "2.0.2"
 slog-json = "2.0.*"
-base64 = "~0.6.*"
-parking_lot = {version = "0.4", features = ["nightly"]}
+tokio-core = "0.1.*"
+tokio-timer = "0.1"
+threadpool = "1.0"
+uuid = { version = "0.5", features = ["v4"] }
+two-lock-queue = "0.1.*"
+xorshift = "0.1.*"
 
 flame = { version = "^0.1.9", optional = true }
 flamer = { version = "^0.1.4", optional = true }
 
-arrayvec = "0.3.*"
-xorshift = "0.1.*"
 
-uuid = { version = "0.5", features = ["v4"] }
 
 [dependencies.slog]
 version = "2"
