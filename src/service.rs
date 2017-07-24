@@ -24,7 +24,6 @@ impl Service {
     }
 }
 
-#[derive(Default)]
 pub struct SqsServiceBuilder<F, P>
     where P: MessageHandler + Send + 'static,
           F: Fn(MessageHandlerActor) -> P,
@@ -43,66 +42,88 @@ pub struct SqsServiceBuilder<F, P>
     logger: Option<Logger>
 }
 
+impl<F, P> Default for SqsServiceBuilder<F, P>
+    where P: MessageHandler + Send + 'static,
+          F: Fn(MessageHandlerActor) -> P,
+{
+    fn default() -> Self {
+        Self {
+            new: None,
+            queue_url: None,
+            consumer_count: None,
+            deleter_count: None,
+            deleter_buffer_flush_period: None,
+            visibility_extender_count: None,
+            visibility_buffer_flush_period: None,
+            msg_handler_count: None,
+            msg_handler_max_queue_depth: None,
+            throttle_consumers: None,
+            short_circuit: None,
+            logger: None,
+        }
+    }
+}
+
 impl<F, P> SqsServiceBuilder<F, P>
     where P: MessageHandler + Send + 'static,
           F: Fn(MessageHandlerActor) -> P,
 {
-    pub fn with_message_handler(&mut self, new: F) -> &mut Self {
+    pub fn with_message_handler(mut self, new: F) -> Self {
         self.new = Some(new);
         self
     }
 
-    pub fn with_queue_url(&mut self, queue_url: String) -> &mut Self {
+    pub fn with_queue_url(mut self, queue_url: String) -> Self {
         self.queue_url = Some(queue_url);
         self
     }
 
-    pub fn with_consumer_count(&mut self, arg: usize) -> &mut Self {
+    pub fn with_consumer_count(mut self, arg: usize) -> Self {
         self.consumer_count = Some(arg);
         self
     }
 
-    pub fn with_deleter_count(&mut self, arg: usize) -> &mut Self {
+    pub fn with_deleter_count(mut self, arg: usize) -> Self {
         self.deleter_count = Some(arg);
         self
     }
 
-    pub fn with_deleter_buffer_flush_period(&mut self, arg: Duration) -> &mut Self {
+    pub fn with_deleter_buffer_flush_period(mut self, arg: Duration) -> Self {
         self.deleter_buffer_flush_period = Some(arg);
         self
     }
 
-    pub fn with_visibility_extender_count(&mut self, arg: usize) -> &mut Self {
+    pub fn with_visibility_extender_count(mut self, arg: usize) -> Self {
         self.visibility_extender_count = Some(arg);
         self
     }
 
-    pub fn with_visibility_buffer_flush_period(&mut self, arg: Duration) -> &mut Self {
+    pub fn with_visibility_buffer_flush_period(mut self, arg: Duration) -> Self {
         self.visibility_buffer_flush_period = Some(arg);
         self
     }
 
-    pub fn with_msg_handler_count(&mut self, arg: usize) -> &mut Self {
+    pub fn with_msg_handler_count(mut self, arg: usize) -> Self {
         self.msg_handler_count = Some(arg);
         self
     }
 
-    pub fn with_msg_handler_max_queue_depth(&mut self, arg: usize) -> &mut Self {
+    pub fn with_msg_handler_max_queue_depth(mut self, arg: usize) -> Self {
         self.msg_handler_max_queue_depth = Some(arg);
         self
     }
 
-    pub fn with_throttle_consumers(&mut self, arg: bool) -> &mut Self {
+    pub fn with_throttle_consumers(mut self, arg: bool) -> Self {
         self.throttle_consumers = Some(arg);
         self
     }
 
-    pub fn with_short_circuit(&mut self, arg: bool) -> &mut Self {
+    pub fn with_short_circuit(mut self, arg: bool) -> Self {
         self.short_circuit = Some(arg);
         self
     }
 
-    pub fn with_logger(&mut self, arg: Logger) -> &mut Self {
+    pub fn with_logger(mut self, arg: Logger) -> Self {
         self.logger = Some(arg);
         self
     }
