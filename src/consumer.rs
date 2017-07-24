@@ -90,6 +90,7 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
             }
             Err(e) => {
                 warn!(self.logger, "Failed to receive sqs message. {}", e);
+                thread::sleep(Duration::from_millis(150));
                 return;
             }
         };
@@ -98,6 +99,13 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
 
         if let Some(mut messages) = messages {
             let o_len = messages.len();
+
+            if o_len == 0 {
+                trace!(self.logger, "Empty receive");
+                thread::sleep(Duration::from_millis(100));
+                return
+            }
+
             messages.sort_by(|a, b| a.receipt_handle.cmp(&b.receipt_handle));
             messages.dedup_by(|a, b| a.receipt_handle == b.receipt_handle);
 
@@ -126,6 +134,8 @@ impl<C, M, T, SQ> Consumer for DelayMessageConsumer<C, M, T, SQ>
             if dur < self.throttle {
                 thread::sleep(self.throttle - dur);
             }
+        } else {
+            trace!(self.logger, "No messages in response");
         }
     }
 
